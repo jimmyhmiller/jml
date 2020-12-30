@@ -48,8 +48,13 @@
       (.dup gen)
       :pop
       (.pop gen)
+      ;; We need some environment or two phases for labels
+      :label
+      (.newLabel gen)
+      :ifNeq
+      (.ifCmp gen (:compare-type code) GeneratorAdapter/NE (:label code))
       :return
-      (.returnValue ^GeneratorAdapter gen))))
+      (.returnValue gen))))
 
 
 (defn generate-default-constructor [^ClassWriter writer]
@@ -105,6 +110,41 @@
 
 
 
+;; if statement example
+
+(do
+  (def writer (ClassWriter. ClassWriter/COMPUTE_FRAMES))
+  (initialize-class writer "Stuff")
+  (generate-default-constructor writer)
+  (def method (Method. "invoke" Type/INT_TYPE (into-array Type [Type/BOOLEAN_TYPE])))
+  (def gen ^GeneratorAdapter (GeneratorAdapter. (int (+ Opcodes/ACC_PUBLIC Opcodes/ACC_STATIC)) method nil nil writer))
+
+
+  (let [gen ^GeneratorAdapter gen
+        else-label (.newLabel gen)]
+
+    (doto gen
+      (.push true) ;; compare to
+      (.loadArg (int 0))
+      (.ifCmp Type/BOOLEAN_TYPE GeneratorAdapter/NE else-label)
+      (.push (int 1))
+      (.returnValue)
+      (.mark else-label)
+      (.push (int 0))
+      (.returnValue)))
+
+  (.endMethod ^GeneratorAdapter gen)
+
+  (.visitEnd ^ClassWriter writer)
+  (.defineClass ^clojure.lang.DynamicClassLoader
+                (clojure.lang.DynamicClassLoader.)
+                (.replace "Stuff" \/ \.) (.toByteArray ^ClassWriter  writer) nil)
+
+  (Stuff/invoke true))
+
+
+
+
 (make-fn {:class-name "Thing"
           :code
           [:plus-int
@@ -156,7 +196,7 @@
 ;; Need to namespace things
 
 
-
+(reflect/reflect GeneratorAdapter)
 
 
 
@@ -168,6 +208,19 @@
 
 
 (decompiler/disassemble (Thing.))
+
+(decompiler/disassemble
+ (let [x 1]
+   (case x
+     1 true
+     2 false
+     3)))
+
+
+(decompiler/disassemble
+ (if (= 43 54)
+   12
+   42))
 
 
 
