@@ -1,4 +1,5 @@
 (ns jml.core
+  (:require [jml.decompile])
   (:import [org.objectweb.asm Opcodes Type ClassWriter]
            [org.objectweb.asm.commons Method GeneratorAdapter]))
 
@@ -103,9 +104,7 @@
     (generate-default-constructor writer)
     (generate-invoke-method writer (assoc description :code (conj (linearize code) [:return])))
     (.visitEnd writer)
-    (.defineClass ^clojure.lang.DynamicClassLoader
-                  (clojure.lang.DynamicClassLoader.)
-                  (.replace ^String class-name \/ \.) (.toByteArray ^ClassWriter  writer) nil)
+    (jml.decompile/print-and-load-bytecode writer class-name)
     class-name))
 
 
@@ -113,8 +112,9 @@
 ;; if statement example
 
 (do
+  (def class-name "Stuff")
   (def writer (ClassWriter. ClassWriter/COMPUTE_FRAMES))
-  (initialize-class writer "Stuff")
+  (initialize-class writer class-name)
   (generate-default-constructor writer)
   (def method (Method. "invoke" Type/INT_TYPE (into-array Type [Type/BOOLEAN_TYPE])))
   (def gen ^GeneratorAdapter (GeneratorAdapter. (int (+ Opcodes/ACC_PUBLIC Opcodes/ACC_STATIC)) method nil nil writer))
@@ -136,11 +136,9 @@
   (.endMethod ^GeneratorAdapter gen)
 
   (.visitEnd ^ClassWriter writer)
-  (.defineClass ^clojure.lang.DynamicClassLoader
-                (clojure.lang.DynamicClassLoader.)
-                (.replace "Stuff" \/ \.) (.toByteArray ^ClassWriter  writer) nil)
+  (jml.decompile/print-and-load-bytecode writer class-name)
 
-  (Stuff/invoke true))
+  (Stuff/invoke false))
 
 
 
