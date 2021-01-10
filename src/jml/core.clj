@@ -8,7 +8,8 @@
 
 (def INIT (Method/getMethod "void <init>()"))
 
-(defn generate-code! [^GeneratorAdapter gen command]
+
+(defn generate-code! [^GeneratorAdapter gen command ]
   (let [code (second command)]
     (case (first command)
 
@@ -21,7 +22,7 @@
                          :op-type Type/INT_TYPE}])
 
       :arg
-      (.loadArg ^GeneratorAdapter gen (:value code))
+      (.loadArg ^GeneratorAdapter gen (int (:value code)))
       :math
       (.math gen (:op code) (:op-type code))
       :get-static-field
@@ -34,10 +35,6 @@
       (.invokeConstructor gen (:owner code) (:method code))
       :new
       (.newInstance gen (:owner code))
-      :store-local
-      (.storeLocal gen (:index code) (:local-type code))
-      :load-local
-      (.loadLocal gen (:index code) (:local-type code))
       :bool
       ;; Should assert bool?
       (.push gen (boolean (:value code)))
@@ -49,13 +46,85 @@
       (.dup gen)
       :pop
       (.pop gen)
+
+      :print (do
+               (.dup gen)
+               (.getStatic gen
+                           (Type/getType (Class/forName "java.lang.System"))
+                           "out"
+                           (Type/getType ^java.lang.Class (.getGenericType (.getDeclaredField (Class/forName "java.lang.System")
+                                                                                              "out"))))
+               (.swap gen)
+               (.invokeVirtual gen (Type/getType ^java.lang.Class
+                                                 (.getGenericType (.getDeclaredField (Class/forName "java.lang.System")
+                                                                                     "out")))
+                               (Method. "println" Type/VOID_TYPE  (into-array Type [Type/INT_TYPE]))))
       ;; We need some environment or two phases for labels
-      :label
-      (.newLabel gen)
-      :ifNeq
-      (.ifCmp gen (:compare-type code) GeneratorAdapter/NE (:label code))
       :return
-      (.returnValue gen))))
+      (.returnValue gen)
+
+      :do nil)))
+
+
+(defn generate-code-with-env! [^GeneratorAdapter gen command env]
+  (let [code (second command)]
+    (case (first command)
+      :label
+      (if-let [label (get env (:value code))]
+        (do
+          (.mark gen label)
+          env)
+        (let [label (.newLabel gen)]
+          (.mark gen label)
+          (assoc env (:value code) label)))
+
+      :jump-not-equal
+      (if-let [label (get env (:value code))]
+        (do
+          (.ifCmp gen (:compare-type code) GeneratorAdapter/NE label)
+          env)
+        (let [label (.newLabel gen)]
+          (.ifCmp gen (:compare-type code) GeneratorAdapter/NE label)
+          (assoc env (:value code) label)))
+
+
+      :jump-equal
+      (if-let [label (get env (:value code))]
+        (do
+          (.ifCmp gen (:compare-type code) GeneratorAdapter/EQ label)
+          env)
+        (let [label (.newLabel gen)]
+          (.ifCmp gen (:compare-type code) GeneratorAdapter/EQ label)
+          (assoc env (:value code) label)))
+
+      :jump
+      (if-let [label (get env (:value code))]
+        (do
+          (.goTo gen label)
+          env)
+        (let [label (.newLabel gen)]
+          (.goTo gen label)
+          (assoc env (:value code) label)))
+
+
+      :store-local
+      (if-let [local (get env (str "local-" (:index code)))]
+        (do
+          (.storeLocal gen local (:local-type code))
+          env)
+        (let [local (.newLocal gen (:local-type code))]
+          (.storeLocal gen local (:local-type code))
+          (assoc env (str "local-" (:index code)) local)))
+
+      :load-local
+      (if-let [local (get env (str "local-" (:index code)))]
+        (do
+          (.loadLocal gen local(:local-type code))
+          env)
+        (throw (ex-info "This local was loaded before stored" {:command command :env env})))
+
+      (do (generate-code! gen command)
+          env))))
 
 
 (defn generate-default-constructor [^ClassWriter writer]
@@ -95,50 +164,17 @@
 (defn generate-invoke-method [^ClassWriter writer {:keys [code return-type arg-types]}]
   (let [method (Method. "invoke" return-type (into-array Type arg-types))
         gen (GeneratorAdapter. (int (+ Opcodes/ACC_PUBLIC Opcodes/ACC_STATIC)) method nil nil writer)]
-    (run! (fn [line] (generate-code! gen line)) code)
+    (reduce (fn [env line] (generate-code-with-env! gen line env)) {} code)
     (.endMethod ^GeneratorAdapter gen)))
 
 (defn make-fn [{:keys [class-name code] :as description}]
-  (let [writer (ClassWriter. ClassWriter/COMPUTE_FRAMES)]
+  (let [writer (ClassWriter. (int (+ ClassWriter/COMPUTE_FRAMES ClassWriter/COMPUTE_MAXS)))]
     (initialize-class writer class-name)
     (generate-default-constructor writer)
     (generate-invoke-method writer (assoc description :code (conj (linearize code) [:return])))
     (.visitEnd writer)
     (jml.decompile/print-and-load-bytecode writer class-name)
     class-name))
-
-
-
-;; if statement example
-
-(do
-  (def class-name "Stuff")
-  (def writer (ClassWriter. ClassWriter/COMPUTE_FRAMES))
-  (initialize-class writer class-name)
-  (generate-default-constructor writer)
-  (def method (Method. "invoke" Type/INT_TYPE (into-array Type [Type/BOOLEAN_TYPE])))
-  (def gen ^GeneratorAdapter (GeneratorAdapter. (int (+ Opcodes/ACC_PUBLIC Opcodes/ACC_STATIC)) method nil nil writer))
-
-
-  (let [gen ^GeneratorAdapter gen
-        else-label (.newLabel gen)]
-
-    (doto gen
-      (.push true) ;; compare to
-      (.loadArg (int 0))
-      (.ifCmp Type/BOOLEAN_TYPE GeneratorAdapter/NE else-label)
-      (.push (int 1))
-      (.returnValue)
-      (.mark else-label)
-      (.push (int 0))
-      (.returnValue)))
-
-  (.endMethod ^GeneratorAdapter gen)
-
-  (.visitEnd ^ClassWriter writer)
-  (jml.decompile/print-and-load-bytecode writer class-name)
-
-  (Stuff/invoke false))
 
 
 
@@ -176,6 +212,105 @@
                            :method (Method. "invoke" Type/INT_TYPE (into-array Type []))}]
           :arg-types []
           :return-type Type/INT_TYPE})
+
+
+(make-fn {:class-name "IfReturn"
+          :code
+          [[:bool true]
+           [:arg {:value 0}]
+           [:jump-not-equal {:value "else" :compare-type Type/BOOLEAN_TYPE}]
+           [:int {:value 1}]
+           [:return]
+           [:label {:value "else"}]
+           [:int {:value 0}]
+           [:return]]
+          :arg-types [Type/BOOLEAN_TYPE]
+          :return-type Type/INT_TYPE})
+
+
+(make-fn {:class-name "LoopThing"
+          :code
+          [[:int {:value 0}]
+           [:store-local {:index 0 :local-type Type/INT_TYPE}]
+
+           [:label {:value "top-of-loop"}]
+           [:load-local {:index 0 :local-type Type/INT_TYPE}]
+           [:arg {:value 0}]
+           [:jump-equal {:value "exit" :compare-type Type/INT_TYPE}]
+           [:load-local {:index 0 :local-type Type/INT_TYPE}]
+           [:print]
+           [:int {:value 1}]
+           [:plus-int]
+           [:store-local {:index 0 :local-type Type/INT_TYPE}]
+           [:jump {:value "top-of-loop"}]
+
+           [:label {:value "exit"}]
+           [:load-local {:index 0 :local-type Type/INT_TYPE}]
+           [:return]]
+           :arg-types [Type/INT_TYPE]
+          :return-type Type/INT_TYPE})
+
+(Type/getType (Class/forName "LoopThing"))
+
+(Type/getType "LLoopThing;")
+
+;; Be careful about having different numbers of items on stack on different code paths.
+
+(make-fn {:class-name "RecursionThing"
+          :code
+          [[:int {:value 0}]
+           [:arg {:value 0}]
+           [:jump-equal {:value "exit" :compare-type Type/INT_TYPE}]
+
+           [:int {:value -1}]
+           [:arg {:value 0}]
+           [:plus-int]
+           [:print]
+           [:invoke-static {:owner (Type/getType "LRecursionThing;")
+                            :method (Method. "invoke" Type/INT_TYPE
+                                             (into-array Type [Type/INT_TYPE]))}]
+           [:return]
+
+           [:label {:value "exit"}]
+           [:arg {:value 0}]
+           [:return]]
+          :arg-types [Type/INT_TYPE]
+          :return-type Type/INT_TYPE})
+
+
+
+
+(make-fn {:class-name "RecursionThing"
+          :code
+          [[:int {:value 0}]
+           [:arg {:value 0}]
+           [:jump-equal {:value "exit" :compare-type Type/INT_TYPE}]
+
+           [:int {:value -1}]
+           [:arg {:value 0}]
+           [:plus-int]
+           [:print]
+           [:invoke-static {:owner (Type/getType "LRecursionThing;")
+                            :method (Method. "invoke" Type/INT_TYPE
+                                             (into-array Type [Type/INT_TYPE]))}]
+           [:return]
+
+           [:label {:value "exit"}]
+           [:arg {:value 0}]
+           [:return]]
+          :arg-types [Type/INT_TYPE]
+          :return-type Type/INT_TYPE})
+
+
+
+
+
+
+(DoRecursion/invoke 10)
+
+(RecursionThing/invoke 10)
+
+
 
 
 {:add-thing (Thing/invoke)
@@ -216,9 +351,10 @@
 
 
 (decompiler/disassemble
- (if (= 43 54)
-   12
-   42))
+ (defn thing [x]
+   (if (zero? x)
+     0
+     (thing (dec x)))))
 
 
 
