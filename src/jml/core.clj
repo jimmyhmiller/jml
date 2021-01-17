@@ -149,36 +149,46 @@
 (defn initialize-class [^ClassWriter writer class-name]
   (.visit writer Opcodes/V1_8 Opcodes/ACC_PUBLIC class-name nil "java/lang/Object" nil))
 
-
-(defn resolve-cmp-op [pred]
-  (case (first pred)
+(defn cmp-op-type [op]
+  (case op
     :=  GeneratorAdapter/EQ
     :!= GeneratorAdapter/NE
     :>  GeneratorAdapter/GT
     :>= GeneratorAdapter/GE
     :<  GeneratorAdapter/LT
     :<= GeneratorAdapter/LE
-    ;; What is a good default here? EQ? Error? What if it's not a operator, but a boolean value ?
-    GeneratorAdapter/EQ))
+    ;; What is a good default here? EQ? Error?
+    :unknown))
 
-(defn resolve-cmp-type [pred]
-  (if (#{:> :>= :< :<=} (first pred))
-    ;; if it's greater or less than, it should probably be INT
-    Type/INT_TYPE
-    ;; otherise it can be both, so for now I'll assume Bool,
-    ;; but we should really check the type of operands
-    Type/BOOLEAN_TYPE))
+(defn resolve-cmp-op [pred]
+  (let [[op arg1 arg2] pred
+        ;; if it's greater or less than op, it should probably be INT_TYPE comparison, otherwise BOOL_TYPE. Obviously needs fixing
+        cmp-type (if (#{:> :>= :< :<=} op) Type/INT_TYPE Type/BOOLEAN_TYPE)
+        cmp-op (cmp-op-type op)
+        ;; I'm going to assume that if it's not one of operators above,
+        ;; then `pred` must be a single boolean value and I'll compare it for equality to [:bool true]
+        [arg1 arg2] (if (or (= cmp-op :unknown)
+                             (some nil? [arg1 arg2]))
+                      [[:bool true]
+                       pred]
+                      [arg1 arg2])
+        cmp-op (if (= cmp-op :unknown) GeneratorAdapter/EQ cmp-op)]
+
+    {:compare-op cmp-op
+     :compare-type cmp-type
+     :arg1 arg1
+     :arg2 arg2}))
 
 (defn desugar-if [[tag pred t-branch f-branch :as node]]
   (if (= tag :if)
     (let [true-label (gensym "true_label_")
           exit-label (gensym "exit_label_")
-          cmp-op     (resolve-cmp-op pred)
-          [_ pred-op1 pred-op2] pred] ;; only works for 2 ops, we should consider single value
+          {:keys [compare-op compare-type
+                  arg1 arg2]}     (resolve-cmp-op pred)]
       [:do
-       pred-op1
-       pred-op2
-       [:jump-cmp {:value true-label :compare-op cmp-op :compare-type (resolve-cmp-type pred)}]
+       arg1
+       arg2
+       [:jump-cmp {:value true-label :compare-op compare-op :compare-type compare-type}]
        f-branch
        [:jump {:value exit-label}]
        [:label {:value true-label}]
@@ -294,7 +304,7 @@
 (make-fn {:class-name "IfReturn"
           :code
           '(return
-            (if (= true (arg 0))
+            (if (= true (arg 0)) ;; but just `true` would work too
               42
               0))
           :arg-types [Type/BOOLEAN_TYPE]
