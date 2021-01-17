@@ -1,5 +1,6 @@
 (ns jml.core
-  (:require [jml.decompile])
+  (:require [jml.decompile]
+            [clojure.walk :as walk])
   (:import [org.objectweb.asm Opcodes Type ClassWriter]
            [org.objectweb.asm.commons Method GeneratorAdapter]))
 
@@ -139,13 +140,42 @@
   (.visit writer Opcodes/V1_8 Opcodes/ACC_PUBLIC class-name nil "java/lang/Object" nil))
 
 
-(defn linearize [code]
+(defn desugar-if [[tag pred t-branch f-branch :as node]]
+  (if (= tag :if)
+    (let [true-label (gensym "true_label_")
+          exit-label (gensym "exit_label_")]
+      [:do
+       pred
+       [:jump-equal {:value true-label :compare-type Type/BOOLEAN_TYPE}]
+       f-branch
+       [:jump {:value exit-label}]
+       [:label {:value true-label}]
+       t-branch
+       [:label {:value exit-label}]])
+    node))
+
+
+(defn de-sexpr [expr]
+  (walk/postwalk
+   (fn [x]
+     (cond
+       (and (seq? x) (= (first x) :arg))
+       [:arg (second (second x))]
+       (seq? x) (do (println x) (vec x))
+       (symbol? x) (keyword x)
+       (int? x) [:int x]
+       (boolean? x) [:bool x]
+       :else x))
+   expr))
+
+(defn linearize* [code]
   (let [[op props & children] code
         children (if (vector? props)
                    (cons props children)
                    children)
         props (cond (map? props)
                     props
+
 
                     (vector? props)
                     {}
@@ -158,7 +188,22 @@
           (empty? children)
           [[op props]]
 
-          :else (conj (into [] (mapcat linearize children)) [op props]))))
+          (= op :if)
+          (recur (desugar-if code))
+
+          (= op :do)
+          (into [] (mapcat linearize* children))
+
+          :else (conj (into [] (mapcat linearize* children)) [op props]))))
+
+(defn linearize [expr]
+  (linearize* (de-sexpr expr)))
+
+
+
+
+
+
 
 
 (defn generate-invoke-method [^ClassWriter writer {:keys [code return-type arg-types]}]
@@ -216,16 +261,17 @@
 
 (make-fn {:class-name "IfReturn"
           :code
-          [[:bool true]
-           [:arg {:value 0}]
-           [:jump-not-equal {:value "else" :compare-type Type/BOOLEAN_TYPE}]
-           [:int {:value 1}]
-           [:return]
-           [:label {:value "else"}]
-           [:int {:value 0}]
-           [:return]]
+          '(return
+            (if (do true (arg 0))
+              42
+              0))
           :arg-types [Type/BOOLEAN_TYPE]
           :return-type Type/INT_TYPE})
+
+
+(IfReturn/invoke true)
+
+
 
 
 (make-fn {:class-name "LoopThing"
