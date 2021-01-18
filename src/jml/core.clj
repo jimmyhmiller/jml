@@ -79,6 +79,7 @@
           (.mark gen label)
           (assoc env (:value code) label)))
 
+;; :jump-equal and :jump-not-equal could be removed, since :jump-cmp replaces them
       :jump-not-equal
       (if-let [label (get env (:value code))]
         (do
@@ -96,6 +97,15 @@
           env)
         (let [label (.newLabel gen)]
           (.ifCmp gen (:compare-type code) GeneratorAdapter/EQ label)
+          (assoc env (:value code) label)))
+
+      :jump-cmp
+      (if-let [label (get env (:value code))]
+        (do
+          (.ifCmp gen (:compare-type code) (:compare-op code) label)
+          env)
+        (let [label (.newLabel gen)]
+          (.ifCmp gen (:compare-type code) (:compare-op code) label)
           (assoc env (:value code) label)))
 
       :jump
@@ -139,14 +149,46 @@
 (defn initialize-class [^ClassWriter writer class-name]
   (.visit writer Opcodes/V1_8 Opcodes/ACC_PUBLIC class-name nil "java/lang/Object" nil))
 
+(defn cmp-op-type [op]
+  (case op
+    :=  GeneratorAdapter/EQ
+    :!= GeneratorAdapter/NE
+    :>  GeneratorAdapter/GT
+    :>= GeneratorAdapter/GE
+    :<  GeneratorAdapter/LT
+    :<= GeneratorAdapter/LE
+    ;; What is a good default here? EQ? Error?
+    :unknown))
+
+(defn resolve-cmp-op [pred]
+  (let [[op arg1 arg2] pred
+        ;; if it's greater or less than op, it should probably be INT_TYPE comparison, otherwise BOOL_TYPE. Obviously needs fixing
+        cmp-type (if (#{:> :>= :< :<=} op) Type/INT_TYPE Type/BOOLEAN_TYPE)
+        cmp-op (cmp-op-type op)
+        ;; I'm going to assume that if it's not one of operators above,
+        ;; then `pred` must be a single boolean value and I'll compare it for equality to [:bool true]
+        [arg1 arg2] (if (or (= cmp-op :unknown)
+                             (some nil? [arg1 arg2]))
+                      [[:bool true]
+                       pred]
+                      [arg1 arg2])
+        cmp-op (if (= cmp-op :unknown) GeneratorAdapter/EQ cmp-op)]
+
+    {:compare-op cmp-op
+     :compare-type cmp-type
+     :arg1 arg1
+     :arg2 arg2}))
 
 (defn desugar-if [[tag pred t-branch f-branch :as node]]
   (if (= tag :if)
     (let [true-label (gensym "true_label_")
-          exit-label (gensym "exit_label_")]
+          exit-label (gensym "exit_label_")
+          {:keys [compare-op compare-type
+                  arg1 arg2]}     (resolve-cmp-op pred)]
       [:do
-       pred
-       [:jump-equal {:value true-label :compare-type Type/BOOLEAN_TYPE}]
+       arg1
+       arg2
+       [:jump-cmp {:value true-label :compare-op compare-op :compare-type compare-type}]
        f-branch
        [:jump {:value exit-label}]
        [:label {:value true-label}]
@@ -262,7 +304,7 @@
 (make-fn {:class-name "IfReturn"
           :code
           '(return
-            (if (do true (arg 0))
+            (if (= true (arg 0)) ;; but just `true` would work too
               42
               0))
           :arg-types [Type/BOOLEAN_TYPE]
@@ -270,6 +312,19 @@
 
 
 (IfReturn/invoke true)
+
+
+(make-fn {:class-name "IfGreaterThanZeroReturn"
+          :code
+          '(return
+            (if (> (arg 0) 0) ;(do true (arg 0))
+              42
+              0))
+          :arg-types [Type/INT_TYPE]
+          :return-type Type/INT_TYPE})
+
+
+(IfGreaterThanZeroReturn/invoke -1)
 
 
 
