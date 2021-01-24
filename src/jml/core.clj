@@ -10,6 +10,7 @@
 (def INIT (Method/getMethod "void <init>()"))
 
 
+
 (defn generate-code! [^GeneratorAdapter gen command ]
   (let [code (second command)]
     (case (first command)
@@ -41,6 +42,8 @@
       (.push gen (boolean (:value code)))
       :int
       (.push gen (int (:value code)))
+      :get-field
+      (.getField gen (:owner code) (:name code) (:field-type code))
       :put-field
       (.putField gen (:owner code) (:name code) (:field-type code))
       :dup
@@ -62,9 +65,7 @@
                                (Method. "println" Type/VOID_TYPE  (into-array Type [Type/INT_TYPE]))))
       ;; We need some environment or two phases for labels
       :return
-      (.returnValue gen)
-
-      :do nil)))
+      (.returnValue gen))))
 
 
 (defn generate-code-with-env! [^GeneratorAdapter gen command env]
@@ -79,7 +80,7 @@
           (.mark gen label)
           (assoc env (:value code) label)))
 
-;; :jump-equal and :jump-not-equal could be removed, since :jump-cmp replaces them
+      ;; :jump-equal and :jump-not-equal could be removed, since :jump-cmp replaces them
       :jump-not-equal
       (if-let [label (get env (:value code))]
         (do
@@ -130,7 +131,7 @@
       :load-local
       (if-let [local (get env (str "local-" (:index code)))]
         (do
-          (.loadLocal gen local(:local-type code))
+          (.loadLocal gen local (:local-type code))
           env)
         (throw (ex-info "This local was loaded before stored" {:command command :env env})))
 
@@ -160,24 +161,29 @@
     ;; What is a good default here? EQ? Error?
     :unknown))
 
-(defn resolve-cmp-op [pred]
-  (let [[op arg1 arg2] pred
-        ;; if it's greater or less than op, it should probably be INT_TYPE comparison, otherwise BOOL_TYPE. Obviously needs fixing
-        cmp-type (if (#{:> :>= :< :<=} op) Type/INT_TYPE Type/BOOLEAN_TYPE)
-        cmp-op (cmp-op-type op)
-        ;; I'm going to assume that if it's not one of operators above,
-        ;; then `pred` must be a single boolean value and I'll compare it for equality to [:bool true]
-        [arg1 arg2] (if (or (= cmp-op :unknown)
-                             (some nil? [arg1 arg2]))
-                      [[:bool true]
-                       pred]
-                      [arg1 arg2])
-        cmp-op (if (= cmp-op :unknown) GeneratorAdapter/EQ cmp-op)]
+(do
+  (defn resolve-cmp-op [pred]
+    (let [[op arg1 arg2] pred
+          ;; if it's greater or less than op, it should probably be INT_TYPE comparison, otherwise BOOL_TYPE. Obviously needs fixing
+          cmp-type (if (#{:> :>= :< :<=} op) Type/INT_TYPE Type/BOOLEAN_TYPE)
+          cmp-op (cmp-op-type op)
+          ;; I'm going to assume that if it's not one of operators above,
+          ;; then `pred` must be a single boolean value and I'll compare it for equality to [:bool true]
+          [arg1 arg2] (if (or (= cmp-op :unknown)
+                              (some nil? [arg1 arg2]))
+                        [[:bool true]
+                         pred]
+                        [arg1 arg2])
+          cmp-op (if (= cmp-op :unknown) GeneratorAdapter/EQ cmp-op)]
+      {:compare-op cmp-op
+       :compare-type cmp-type
+       :arg1 arg1
+       :arg2 arg2}))
 
-    {:compare-op cmp-op
-     :compare-type cmp-type
-     :arg1 arg1
-     :arg2 arg2}))
+  (linearize '(return
+               (if (= true (arg 0)) ;; but just `true` would work too
+                 42
+                 0))))
 
 (defn desugar-if [[tag pred t-branch f-branch :as node]]
   (if (= tag :if)
@@ -199,16 +205,24 @@
 
 (defn de-sexpr [expr]
   (walk/postwalk
-   (fn [x]
-     (cond
-       (and (seq? x) (= (first x) :arg))
-       [:arg (second (second x))]
-       (seq? x) (do (println x) (vec x))
-       (symbol? x) (keyword x)
-       (int? x) [:int x]
-       (boolean? x) [:bool x]
-       :else x))
-   expr))
+   (fn [x] (if (reduced? x)
+             @x
+             x))
+   (walk/prewalk
+    (fn [x]
+      (cond
+        (and (seq? x) (= (first x) 'arg))
+        (reduced [:arg {:value (second x)}])
+        (map? x) (reduced x)
+        (seq? x) (vec x)
+        (and (vector? x) (keyword? (first x))) (reduced x)
+        (symbol? x) (keyword x)
+        (int? x) (reduced [:int x])
+        (boolean? x) (reduced [:bool x])
+        :else x))
+    expr)))
+
+
 
 (defn linearize* [code]
   (let [[op props & children] code
@@ -244,10 +258,6 @@
 
 
 
-
-
-
-
 (defn generate-invoke-method [^ClassWriter writer {:keys [code return-type arg-types]}]
   (let [method (Method. "invoke" return-type (into-array Type arg-types))
         gen (GeneratorAdapter. (int (+ Opcodes/ACC_PUBLIC Opcodes/ACC_STATIC)) method nil nil writer)]
@@ -265,41 +275,111 @@
 
 
 
+(defn make-struct-field [^ClassWriter writer {:keys [name type]}]
+  (let [field (.visitField writer Opcodes/ACC_PUBLIC name (.getDescriptor ^Type type) nil nil)]
+    (.visitEnd field)))
+
+(defn make-field-assignment [^GeneratorAdapter gen this-type index {:keys [name type]}]
+  (.loadThis gen)
+  (.loadArg gen (int index))
+  (.putField gen this-type name type))
+
+(defn make-struct-constructor [writer {:keys [class-name fields]}]
+  (let [gen (GeneratorAdapter. Opcodes/ACC_PUBLIC
+                               (Method. "<init>" Type/VOID_TYPE (into-array Type (map :type fields))) nil nil writer)
+        ;; This is probably not always true, especially with namespacing.
+        this-type (Type/getType (str "L" class-name ";"))]
+    (.visitCode gen)
+    (.loadThis gen)
+    (.invokeConstructor gen (Type/getType Object) INIT)
+    (doall (map-indexed (fn [i field] (make-field-assignment gen this-type i field)) fields))
+    (.returnValue gen)
+    (.endMethod gen)))
+
+(defn make-struct [{:keys [class-name fields] :as description}]
+  (let [writer (ClassWriter. (int (+ ClassWriter/COMPUTE_FRAMES ClassWriter/COMPUTE_MAXS)))]
+    (initialize-class writer class-name)
+    (generate-default-constructor writer)
+    (run! (partial make-struct-field writer) fields)
+    (make-struct-constructor writer description)
+    (.visitEnd writer)
+    (jml.decompile/print-and-load-bytecode writer class-name)
+    class-name))
+
+
+
+;; TODO
+;; Make Enums
+;; Syntax for static invoke
+;; Sytax for method invoke
+;; Syntax for function call
+;; Have a type environment
+;; Make function syntax?
+;; Need Loop construct
+;; Let would be nice
+
+
+
+
+(make-struct {:class-name "Point"
+              :fields [{:name "x" :type Type/INT_TYPE}
+                       {:name "y" :type Type/INT_TYPE}]})
+
+
+
+
+(def p (Point.))
+(def p2 (Point. 1 2))
+
+
+(set! (.x ^Point p) 2)
+(set! (.y ^Point p) 4)
+
+(.y ^Point p2)
+(.x ^Point p2)
+
+
 
 (make-fn {:class-name "Thing"
           :code
-          [:plus-int
-           [:int 1]
-           [:int 32]]
+          '(plus-int 1 2)
           :return-type Type/INT_TYPE})
 
 
 (make-fn {:class-name "BoolReturn"
-          :code
-          [:bool true]
+          :code true
           :return-type Type/BOOLEAN_TYPE})
+
+(BoolReturn/invoke)
 
 (make-fn {:class-name "ArgReturn"
           :code
-          [:arg 0]
+          '(arg 0)
           :arg-types [Type/INT_TYPE]
           :return-type Type/INT_TYPE})
 
 (make-fn {:class-name "TwoArgAdd3Return"
           :code
-          [:plus-int [:int 3]
-           [:plus-int [:arg 0] [:arg 1]]]
+          '(plus-int 3
+                     (plus-int (arg 0) (arg 1)))
           :arg-types [Type/INT_TYPE Type/INT_TYPE]
           :return-type Type/INT_TYPE})
 
+(linearize  ('invoke-static {:owner (Type/getType (Class/forName "Thing"))
+                           :method (Method. "invoke" Type/INT_TYPE (into-array Type []))}))
 
 (make-fn {:class-name "CallOther"
           :code
-          [:invoke-static {:owner (Type/getType (Class/forName "Thing"))
-                           :method (Method. "invoke" Type/INT_TYPE (into-array Type []))}]
+          (list 'invoke-static {:owner (Type/getType (Class/forName "Thing"))
+                                :method (Method. "invoke" Type/INT_TYPE (into-array Type []))})
           :arg-types []
           :return-type Type/INT_TYPE})
 
+
+(linearize '(return
+            (if (= true (arg 0)) ;; but just `true` would work too
+              42
+              0)))
 
 (make-fn {:class-name "IfReturn"
           :code
@@ -317,15 +397,14 @@
 (make-fn {:class-name "IfGreaterThanZeroReturn"
           :code
           '(return
-            (if (> (arg 0) 0) ;(do true (arg 0))
+            (if (> (arg 0) 0)
               42
               0))
           :arg-types [Type/INT_TYPE]
           :return-type Type/INT_TYPE})
 
 
-(IfGreaterThanZeroReturn/invoke -1)
-
+(IfGreaterThanZeroReturn/invoke 2)
 
 
 
@@ -333,7 +412,6 @@
           :code
           [[:int {:value 0}]
            [:store-local {:index 0 :local-type Type/INT_TYPE}]
-
            [:label {:value "top-of-loop"}]
            [:load-local {:index 0 :local-type Type/INT_TYPE}]
            [:arg {:value 0}]
@@ -350,6 +428,8 @@
            [:return]]
            :arg-types [Type/INT_TYPE]
           :return-type Type/INT_TYPE})
+
+(LoopThing/invoke 10)
 
 (Type/getType (Class/forName "LoopThing"))
 
@@ -381,33 +461,6 @@
 
 
 
-(make-fn {:class-name "RecursionThing"
-          :code
-          [[:int {:value 0}]
-           [:arg {:value 0}]
-           [:jump-equal {:value "exit" :compare-type Type/INT_TYPE}]
-
-           [:int {:value -1}]
-           [:arg {:value 0}]
-           [:plus-int]
-           [:print]
-           [:invoke-static {:owner (Type/getType "LRecursionThing;")
-                            :method (Method. "invoke" Type/INT_TYPE
-                                             (into-array Type [Type/INT_TYPE]))}]
-           [:return]
-
-           [:label {:value "exit"}]
-           [:arg {:value 0}]
-           [:return]]
-          :arg-types [Type/INT_TYPE]
-          :return-type Type/INT_TYPE})
-
-
-
-
-
-
-(DoRecursion/invoke 10)
 
 (RecursionThing/invoke 10)
 
@@ -421,55 +474,46 @@
  :call-other (CallOther/invoke)}
 
 
+(comment
 
-;; We need our own notion of type
-;; We need a type environment
-;; We need locals
-;; We need conditionals
-;; Function call syntax
-;; Need to namespace things
+  (require '[clojure.reflect :as reflect])
+  (reflect/reflect GeneratorAdapter)
 
+  (reflect/reflect (Thing.))
 
-(reflect/reflect GeneratorAdapter)
+  (require '[clj-java-decompiler.core :as decompiler])
 
 
+  (decompiler/disassemble (Thing.))
 
-(require '[clojure.reflect :as reflect])
-
-(reflect/reflect (Thing.))
-
-(require '[clj-java-decompiler.core :as decompiler])
-
-
-(decompiler/disassemble (Thing.))
-
-(decompiler/disassemble
- (let [x 1]
-   (case x
-     1 true
-     2 false
-     3)))
+  (decompiler/disassemble
+   (let [x 1]
+     (case x
+       1 true
+       2 false
+       3)))
 
 
-(decompiler/disassemble
- (defn thing [x]
-   (if (zero? x)
-     0
-     (thing (dec x)))))
+  (decompiler/disassemble
+   (defn thing [x]
+     (if (zero? x)
+       0
+       (thing (dec x)))))
 
 
 
-{:already-linear (linearize [[:int {:value 42}]])
- :children-empty (linearize [:const-thing {} []])
- :simple-plus (linearize [:plus-int {}
-                          [:int {:value 31}]
-                          [:int {:value 32}]])
- :complicated-plus (linearize [:plus-int {}
-                               [:int {:value 1}]
-                               [:plus-int {} [:int {:value 2}] [:int {:value 3}]]])
- :complicated-plus' (linearize [:plus-int
-                                [:int {:value 1}]
-                                [:plus-int [:int {:value 2}] [:int {:value 3}]]])
- :complicated-plus'' (linearize [:plus-int
+  {:already-linear (linearize [[:int {:value 42}]])
+   :children-empty (linearize [:const-thing {} []])
+   :simple-plus (linearize [:plus-int {}
+                            [:int {:value 31}]
+                            [:int {:value 32}]])
+   :complicated-plus (linearize [:plus-int {}
                                  [:int {:value 1}]
-                                 [:plus-int [:int 2] [:int {:value 3}]]])}
+                                 [:plus-int {} [:int {:value 2}] [:int {:value 3}]]])
+   :complicated-plus' (linearize [:plus-int
+                                  [:int {:value 1}]
+                                  [:plus-int [:int {:value 2}] [:int {:value 3}]]])
+   :complicated-plus'' (linearize [:plus-int
+                                   [:int {:value 1}]
+                                   [:plus-int [:int 2] [:int {:value 3}]]])}
+  )
