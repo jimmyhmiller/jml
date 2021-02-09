@@ -161,29 +161,25 @@
     ;; What is a good default here? EQ? Error?
     :unknown))
 
-(do
-  (defn resolve-cmp-op [pred]
-    (let [[op arg1 arg2] pred
-          ;; if it's greater or less than op, it should probably be INT_TYPE comparison, otherwise BOOL_TYPE. Obviously needs fixing
-          cmp-type (if (#{:> :>= :< :<=} op) Type/INT_TYPE Type/BOOLEAN_TYPE)
-          cmp-op (cmp-op-type op)
-          ;; I'm going to assume that if it's not one of operators above,
-          ;; then `pred` must be a single boolean value and I'll compare it for equality to [:bool true]
-          [arg1 arg2] (if (or (= cmp-op :unknown)
-                              (some nil? [arg1 arg2]))
-                        [[:bool true]
-                         pred]
-                        [arg1 arg2])
-          cmp-op (if (= cmp-op :unknown) GeneratorAdapter/EQ cmp-op)]
-      {:compare-op cmp-op
-       :compare-type cmp-type
-       :arg1 arg1
-       :arg2 arg2}))
 
-  (linearize '(return
-               (if (= true (arg 0)) ;; but just `true` would work too
-                 42
-                 0))))
+(defn resolve-cmp-op [pred]
+  (let [[op arg1 arg2] pred
+        ;; if it's greater or less than op, it should probably be INT_TYPE comparison, otherwise BOOL_TYPE. Obviously needs fixing
+        cmp-type (if (#{:> :>= :< :<=} op) Type/INT_TYPE Type/BOOLEAN_TYPE)
+        cmp-op (cmp-op-type op)
+        ;; I'm going to assume that if it's not one of operators above,
+        ;; then `pred` must be a single boolean value and I'll compare it for equality to [:bool true]
+        [arg1 arg2] (if (or (= cmp-op :unknown)
+                            (some nil? [arg1 arg2]))
+                      [[:bool true]
+                       pred]
+                      [arg1 arg2])
+        cmp-op (if (= cmp-op :unknown) GeneratorAdapter/EQ cmp-op)]
+    {:compare-op cmp-op
+     :compare-type cmp-type
+     :arg1 arg1
+     :arg2 arg2}))
+
 
 (defn desugar-if [[tag pred t-branch f-branch :as node]]
   (if (= tag :if)
