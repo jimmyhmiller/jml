@@ -342,6 +342,70 @@
   (make-enum-factory writer class-name (assoc enum :tag tag :tagName name)))
 
 
+
+
+(defn gen-field-to-string [^GeneratorAdapter gen this-type sb-type sb-append {:keys [name type]}]
+  ;; assumes there is already a StringBuilder on stack, ready to append to..
+  (.loadThis gen)
+  (.getField gen this-type name type)
+
+  (.invokeVirtual gen sb-type
+                  (Method. "append"
+                           (Type/getType java.lang.StringBuilder)
+                           (into-array Type [type])))
+  (.dup gen)
+  (.push gen " ") ;; this adds a space to last field as well, which is annoying but I'm too tired to deal with it today
+  (.invokeVirtual gen sb-type sb-append)
+  (.dup gen))
+
+(defn make-table-switch-gen [^GeneratorAdapter gen {:keys [class-name variants]}]
+  (let [variants-indexed (into {} (map-indexed vector variants))
+        this-type (Type/getType (str "L" class-name ";"))
+        sb-type (Type/getType (Class/forName "java.lang.StringBuilder"))
+        sb-ctor (Method/getMethod "void <init> (String)")
+        sb-to-string (Method/getMethod "String toString ()")
+        sb-append    (Method/getMethod "java.lang.StringBuilder append (String)")]
+    (proxy [org.objectweb.asm.commons.TableSwitchGenerator] []
+      (generateCase [int-key end]
+        (let [{:keys [name fields]} (variants-indexed int-key)]
+          (.newInstance gen sb-type)
+          (.dup gen)
+          (.push gen (str class-name "/" name "("))
+          (.invokeConstructor gen sb-type sb-ctor)
+
+          (run! (partial gen-field-to-string gen this-type sb-type sb-append) fields)
+
+          (.push gen ")")
+          (.invokeVirtual gen sb-type sb-append)
+          (.invokeVirtual gen sb-type sb-to-string)
+
+          (.returnValue gen))
+        )
+      (generateDefault []
+        (.push gen "Variant not found")
+        (.returnValue gen)
+        ))))
+
+
+(defn make-to-string [writer {:keys [class-name variants] :as description}]
+  (let [this-type (Type/getType (str "L" class-name ";"))
+        method (Method. "toString" (Type/getType String) (into-array Type []))
+        gen (GeneratorAdapter. (int (+ Opcodes/ACC_PUBLIC)) method nil nil writer)
+        tsg (make-table-switch-gen gen description)]
+
+    (.visitCode gen)
+    (.loadThis gen)
+    (.getField gen this-type "tag" Type/INT_TYPE)
+
+    (.tableSwitch gen
+                  (int-array (range (count variants)))
+                  tsg)
+
+
+
+    (.endMethod ^GeneratorAdapter gen))
+  )
+
 ;; NOTE: All names must be unique
 (defn make-enum [{:keys [class-name variants] :as description}]
   (let [writer (ClassWriter. (int (+ ClassWriter/COMPUTE_FRAMES ClassWriter/COMPUTE_MAXS)))]
@@ -349,6 +413,7 @@
     (generate-default-constructor writer)
     (make-field writer {:name "tag" :type Type/INT_TYPE})
     (make-field writer {:name "tagName" :type (Type/getType String)})
+    (make-to-string writer description)
     (run-indexed! (partial make-enum-variant writer class-name) variants)
     (.visitEnd writer)
     (jml.decompile/print-and-load-bytecode writer class-name)
@@ -377,14 +442,15 @@
  (.blue ^Color c1)
  (.tag ^Color c1)
  (.tagName ^Color c1)
-
+ (.toString c1)
 
  (.cyan ^Color c2)
  (.magenta ^Color c2)
  (.yellow ^Color c2)
  (.key ^Color c2)
  (.tag ^Color c2)
- (.tagName ^Color c2)]
+ (.tagName ^Color c2)
+ (.toString c2)]
 
 
 
