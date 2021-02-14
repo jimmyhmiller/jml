@@ -370,7 +370,7 @@
         (let [{:keys [name fields]} (variants-indexed int-key)]
           (.newInstance gen sb-type)
           (.dup gen)
-          (.push gen (str class-name "/" name "("))
+          (.push gen (str class-name "/" name "( "))
           (.invokeConstructor gen sb-type sb-ctor)
 
           (run! (partial gen-field-to-string gen this-type sb-type sb-append) fields)
@@ -442,7 +442,7 @@
  (.blue ^Color c1)
  (.tag ^Color c1)
  (.tagName ^Color c1)
- (.toString c1)
+ (.toString ^Color c1)
 
  (.cyan ^Color c2)
  (.magenta ^Color c2)
@@ -450,7 +450,7 @@
  (.key ^Color c2)
  (.tag ^Color c2)
  (.tagName ^Color c2)
- (.toString c2)]
+ (.toString ^Color c2)]
 
 
 
