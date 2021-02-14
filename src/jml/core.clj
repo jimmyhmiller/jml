@@ -370,7 +370,7 @@
         (let [{:keys [name fields]} (variants-indexed int-key)]
           (.newInstance gen sb-type)
           (.dup gen)
-          (.push gen (str class-name "/" name "( "))
+          (.push gen (str "(" class-name "/" name " "))
           (.invokeConstructor gen sb-type sb-ctor)
 
           (run! (partial gen-field-to-string gen this-type sb-type sb-append) fields)
