@@ -10,7 +10,6 @@
 (def INIT (Method/getMethod "void <init>()"))
 
 
-
 (defn generate-code! [^GeneratorAdapter gen command ]
   (let [code (second command)]
     (case (first command)
@@ -252,8 +251,6 @@
   (linearize* (de-sexpr expr)))
 
 
-
-
 (defn generate-invoke-method [^ClassWriter writer {:keys [code return-type arg-types]}]
   (let [method (Method. "invoke" return-type (into-array Type arg-types))
         gen (GeneratorAdapter. (int (+ Opcodes/ACC_PUBLIC Opcodes/ACC_STATIC)) method nil nil writer)]
@@ -271,7 +268,7 @@
 
 
 
-(defn make-struct-field [^ClassWriter writer {:keys [name type]}]
+(defn make-field [^ClassWriter writer {:keys [name type]}]
   (let [field (.visitField writer Opcodes/ACC_PUBLIC name (.getDescriptor ^Type type) nil nil)]
     (.visitEnd field)))
 
@@ -279,6 +276,16 @@
   (.loadThis gen)
   (.loadArg gen (int index))
   (.putField gen this-type name type))
+
+
+(defn make-field-assignment-on-stack [^GeneratorAdapter gen this-type index {:keys [name type]}]
+  (.dup gen)
+  (.loadArg gen (int index))
+  (.putField gen this-type name type))
+
+
+(defn run-indexed! [f coll]
+  (doall (map-indexed f coll)))
 
 (defn make-struct-constructor [writer {:keys [class-name fields]}]
   (let [gen (GeneratorAdapter. Opcodes/ACC_PUBLIC
@@ -288,7 +295,7 @@
     (.visitCode gen)
     (.loadThis gen)
     (.invokeConstructor gen (Type/getType Object) INIT)
-    (doall (map-indexed (fn [i field] (make-field-assignment gen this-type i field)) fields))
+    (run-indexed! (fn [i field] (make-field-assignment gen this-type i field)) fields)
     (.returnValue gen)
     (.endMethod gen)))
 
@@ -296,7 +303,7 @@
   (let [writer (ClassWriter. (int (+ ClassWriter/COMPUTE_FRAMES ClassWriter/COMPUTE_MAXS)))]
     (initialize-class writer class-name)
     (generate-default-constructor writer)
-    (run! (partial make-struct-field writer) fields)
+    (run! (partial make-field writer) fields)
     (make-struct-constructor writer description)
     (.visitEnd writer)
     (jml.decompile/print-and-load-bytecode writer class-name)
@@ -304,11 +311,90 @@
 
 
 
+(defn make-enum-factory [writer class-name {:keys [name fields tagName tag]}]
+  (let [ ;; This is probably not always true, especially with namespacing.
+        this-type (Type/getType (str "L" class-name ";"))
+        method (Method. name this-type (into-array Type (map :type fields)))
+        gen (GeneratorAdapter. (int (+ Opcodes/ACC_PUBLIC Opcodes/ACC_STATIC)) method nil nil writer)]
+    (.visitCode gen)
+    (.newInstance gen this-type)
+    (.dup gen)
+    (.invokeConstructor gen this-type INIT)
+
+    (.dup gen)
+    (.push gen (int tag))
+    (.putField gen this-type "tag" Type/INT_TYPE)
+
+    (.dup gen)
+    (.push gen ^String tagName)
+    (.putField gen this-type "tagName" (Type/getType String))
+
+
+    (run-indexed! (fn [i field] (make-field-assignment-on-stack gen this-type i field)) fields)
+    (.returnValue gen)
+    (.endMethod ^GeneratorAdapter gen)))
+
+
+
+
+(defn make-enum-variant [writer class-name tag {:keys [name fields] :as enum}]
+  (run! (partial make-field writer) fields)
+  (make-enum-factory writer class-name (assoc enum :tag tag :tagName name)))
+
+
+;; NOTE: All names must be unique
+(defn make-enum [{:keys [class-name variants] :as description}]
+  (let [writer (ClassWriter. (int (+ ClassWriter/COMPUTE_FRAMES ClassWriter/COMPUTE_MAXS)))]
+    (initialize-class writer class-name)
+    (generate-default-constructor writer)
+    (make-field writer {:name "tag" :type Type/INT_TYPE})
+    (make-field writer {:name "tagName" :type (Type/getType String)})
+    (run-indexed! (partial make-enum-variant writer class-name) variants)
+    (.visitEnd writer)
+    (jml.decompile/print-and-load-bytecode writer class-name)
+    class-name))
+
+
+(def Color (make-enum {:class-name "Color"
+                       :variants [{:name "RGB"
+                                   :fields [{:name "red" :type Type/INT_TYPE}
+                                            {:name "green" :type Type/INT_TYPE}
+                                            {:name "blue" :type Type/INT_TYPE}]}
+                                  {:name "CMYK"
+                                   :fields [{:name "cyan" :type Type/INT_TYPE}
+                                            {:name "magenta" :type Type/INT_TYPE}
+                                            {:name "yellow" :type Type/INT_TYPE}
+                                            {:name "key" :type Type/INT_TYPE}]}]}))
+
+
+
+(def c1 (Color/RGB 255 42 12))
+(def c2 (Color/CMYK 1 2 3 4))
+
+
+[(.red ^Color c1)
+ (.green ^Color c1)
+ (.blue ^Color c1)
+ (.tag ^Color c1)
+ (.tagName ^Color c1)
+
+
+ (.cyan ^Color c2)
+ (.magenta ^Color c2)
+ (.yellow ^Color c2)
+ (.key ^Color c2)
+ (.tag ^Color c2)
+ (.tagName ^Color c2)]
+
+
+
+
+
 ;; TODO
-;; Make Enums
 ;; Syntax for static invoke
 ;; Sytax for method invoke
 ;; Syntax for function call
+;; Syntax for enums
 ;; Have a type environment
 ;; Make function syntax?
 ;; Need Loop construct
@@ -482,7 +568,7 @@
 
   (decompiler/disassemble (Thing.))
 
-  (decompiler/disassemble
+(decompiler/disassemble
    (let [x 1]
      (case x
        1 true
