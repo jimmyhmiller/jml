@@ -219,6 +219,8 @@
 
 
 
+
+
 (defn linearize* [code]
   (let [[op props & children] code
         children (if (vector? props)
@@ -263,8 +265,7 @@
     (generate-default-constructor writer)
     (generate-invoke-method writer (assoc description :code (conj (linearize code) [:return])))
     (.visitEnd writer)
-    (jml.decompile/print-and-load-bytecode writer class-name)
-    class-name))
+    (jml.decompile/print-and-load-bytecode writer class-name)))
 
 
 
@@ -311,6 +312,77 @@
 
 
 
+
+(defn gen-field-to-string [^GeneratorAdapter gen this-type sb-type sb-append length index {:keys [name type]}]
+  ;; assumes there is already a StringBuilder on stack, ready to append to..
+  (.loadThis gen)
+  (.getField gen this-type name type)
+
+  (.invokeVirtual gen sb-type
+                  (Method. "append"
+                           (Type/getType java.lang.StringBuilder)
+                           (into-array Type [(if (= (.getSort ^Type type) Type/OBJECT)
+                                               (Type/getType Object)
+                                               type)])))
+  (when-not (= length (inc index))
+    (.dup gen)
+    (.push gen " ")
+    (.invokeVirtual gen sb-type sb-append))
+  (.dup gen))
+
+
+
+
+
+(defn make-table-switch-gen [^GeneratorAdapter gen {:keys [class-name variants]}]
+  (let [variants-indexed (into {} (map-indexed vector variants))
+        this-type (Type/getType (str "L" class-name ";"))
+        sb-type (Type/getType (Class/forName "java.lang.StringBuilder"))
+        sb-ctor (Method/getMethod "void <init> (String)")
+        sb-to-string (Method/getMethod "String toString ()")
+        sb-append    (Method/getMethod "java.lang.StringBuilder append (String)")]
+    (proxy [org.objectweb.asm.commons.TableSwitchGenerator] []
+      (generateCase [int-key end]
+        (let [{:keys [name fields]} (variants-indexed int-key)]
+          (.newInstance gen sb-type)
+          (.dup gen)
+          (.push gen (str "(" class-name "/" name (when-not (empty? fields) " ")))
+          (.invokeConstructor gen sb-type sb-ctor)
+
+          (run-indexed! (partial gen-field-to-string gen this-type sb-type sb-append (count fields)) fields)
+
+          (.push gen ")")
+          (.invokeVirtual gen sb-type sb-append)
+          (.invokeVirtual gen sb-type sb-to-string)
+
+          (.returnValue gen))
+        )
+      (generateDefault []
+        (.push gen "Variant not found")
+        (.returnValue gen)))))
+
+
+(defn make-to-string [writer {:keys [class-name variants] :as description}]
+  (let [this-type (Type/getType (str "L" class-name ";"))
+        method (Method. "toString" (Type/getType String) (into-array Type []))
+        gen (GeneratorAdapter. (int (+ Opcodes/ACC_PUBLIC)) method nil nil writer)
+        tsg (make-table-switch-gen gen description)]
+
+    (.visitCode gen)
+    (.loadThis gen)
+    (.getField gen this-type "tag" Type/INT_TYPE)
+
+    (.tableSwitch gen
+                  (int-array (range (count variants)))
+                  tsg)
+
+
+
+    (.endMethod ^GeneratorAdapter gen)))
+
+
+
+
 (defn make-enum-factory [writer class-name {:keys [name fields tagName tag]}]
   (let [ ;; This is probably not always true, especially with namespacing.
         this-type (Type/getType (str "L" class-name ";"))
@@ -338,75 +410,11 @@
 
 
 (defn make-enum-variant [writer class-name tag {:keys [name fields] :as enum}]
-  (run! (partial make-field writer) fields)
   (make-enum-factory writer class-name (assoc enum :tag tag :tagName name)))
 
 
 
-
-(defn gen-field-to-string [^GeneratorAdapter gen this-type sb-type sb-append {:keys [name type]}]
-  ;; assumes there is already a StringBuilder on stack, ready to append to..
-  (.loadThis gen)
-  (.getField gen this-type name type)
-
-  (.invokeVirtual gen sb-type
-                  (Method. "append"
-                           (Type/getType java.lang.StringBuilder)
-                           (into-array Type [type])))
-  (.dup gen)
-  (.push gen " ") ;; this adds a space to last field as well, which is annoying but I'm too tired to deal with it today
-  (.invokeVirtual gen sb-type sb-append)
-  (.dup gen))
-
-(defn make-table-switch-gen [^GeneratorAdapter gen {:keys [class-name variants]}]
-  (let [variants-indexed (into {} (map-indexed vector variants))
-        this-type (Type/getType (str "L" class-name ";"))
-        sb-type (Type/getType (Class/forName "java.lang.StringBuilder"))
-        sb-ctor (Method/getMethod "void <init> (String)")
-        sb-to-string (Method/getMethod "String toString ()")
-        sb-append    (Method/getMethod "java.lang.StringBuilder append (String)")]
-    (proxy [org.objectweb.asm.commons.TableSwitchGenerator] []
-      (generateCase [int-key end]
-        (let [{:keys [name fields]} (variants-indexed int-key)]
-          (.newInstance gen sb-type)
-          (.dup gen)
-          (.push gen (str "(" class-name "/" name " "))
-          (.invokeConstructor gen sb-type sb-ctor)
-
-          (run! (partial gen-field-to-string gen this-type sb-type sb-append) fields)
-
-          (.push gen ")")
-          (.invokeVirtual gen sb-type sb-append)
-          (.invokeVirtual gen sb-type sb-to-string)
-
-          (.returnValue gen))
-        )
-      (generateDefault []
-        (.push gen "Variant not found")
-        (.returnValue gen)
-        ))))
-
-
-(defn make-to-string [writer {:keys [class-name variants] :as description}]
-  (let [this-type (Type/getType (str "L" class-name ";"))
-        method (Method. "toString" (Type/getType String) (into-array Type []))
-        gen (GeneratorAdapter. (int (+ Opcodes/ACC_PUBLIC)) method nil nil writer)
-        tsg (make-table-switch-gen gen description)]
-
-    (.visitCode gen)
-    (.loadThis gen)
-    (.getField gen this-type "tag" Type/INT_TYPE)
-
-    (.tableSwitch gen
-                  (int-array (range (count variants)))
-                  tsg)
-
-
-
-    (.endMethod ^GeneratorAdapter gen))
-  )
-
-;; NOTE: All names must be unique
+;; NOTE: All names type combinations must be unique
 (defn make-enum [{:keys [class-name variants] :as description}]
   (let [writer (ClassWriter. (int (+ ClassWriter/COMPUTE_FRAMES ClassWriter/COMPUTE_MAXS)))]
     (initialize-class writer class-name)
@@ -414,10 +422,65 @@
     (make-field writer {:name "tag" :type Type/INT_TYPE})
     (make-field writer {:name "tagName" :type (Type/getType String)})
     (make-to-string writer description)
+    (run! (partial make-field writer) (set (mapcat :fields variants)))
     (run-indexed! (partial make-enum-variant writer class-name) variants)
     (.visitEnd writer)
-    (jml.decompile/print-and-load-bytecode writer class-name)
-    class-name))
+    ;; Should have a way to return class and not print
+    (jml.decompile/print-and-load-bytecode writer class-name)))
+
+
+
+;; TODO Get rid of evals
+;; This code is pretty gross
+;; remove hacks
+(defn get-type [type]
+  (cond (symbol? type)
+        (eval type)
+
+        :else type))
+
+(defn process-defn [[_ name types body]]
+  {:type :fn
+   :class-name (clojure.core/name name)
+   :arg-types (map get-type(butlast types))
+   :return-type (get-type (last types))
+   :code body})
+
+
+(defn dispatch-on-type [{:keys [type] :as entity}]
+  (case type
+    :fn (make-fn entity)
+    (throw (ex-info "not handled" {}))))
+
+
+(defn run-multiple [& s-exprs]
+  (let [env
+        (reduce (fn [env s-expr]
+                  (case (first s-expr)
+                    ;; Put types in env
+                    'defn (assoc env (second s-expr) (dispatch-on-type (process-defn s-expr)))
+                    (throw (ex-info "unhandled" {}))))
+                {} s-exprs)]
+    ;; invoke main using reflection
+    (.invoke ^java.lang.reflect.Method
+             (.getMethod ^java.lang.Class (get env 'main)
+                         "invoke" (into-array Class []))
+             nil
+             (into-array Object []))))
+
+
+
+;; TODO
+;; Resolve types over whole ast
+;; Capture Function Evironment with Types
+;; Invoke functions
+;; Better Interop
+;; Light-weight type annotations
+;; Match using table switch AST tag
+;; General code cleanup (no multiple files)
+
+
+
 
 
 (def Color (make-enum {:class-name "Color"
@@ -469,6 +532,41 @@
 
 
 
+(def code
+
+  (jml.core/make-enum
+   {:class-name "Code"
+    :variants
+    [{:name "PlusInt"
+      :fields []}
+     {:name "SubInt"
+      :fields []}
+     {:name "Arg"
+      :fields [{:name "argIndex" :type Type/INT_TYPE}]}
+     {:name "Math"
+      :fields [{:name "op" :type Type/INT_TYPE}
+               {:name "opType" :type (Type/getType Type)}]}
+     {:name "GetStaticField"
+      :fields [{:name "owner" :type (Type/getType Type)}
+               {:name "name" :type (Type/getType String)}
+               {:name "resultType" :type (Type/getType Type)}]}
+     {:name "Int"
+      :fields [{:name "intValue" :type Type/INT_TYPE}]}
+     {:name "Bool"
+      :fields [{:name "boolValue" :type Type/BOOLEAN_TYPE}]}]}))
+
+[(Code/PlusInt)
+ (Code/SubInt)
+ (Code/Arg 0)
+ (Code/Math GeneratorAdapter/ADD Type/INT_TYPE)
+ (Code/GetStaticField Type/INT_TYPE "thing" Type/INT_TYPE)
+ (Code/Int 1)
+ (Code/Bool true)]
+
+
+
+
+
 (make-struct {:class-name "Point"
               :fields [{:name "x" :type Type/INT_TYPE}
                        {:name "y" :type Type/INT_TYPE}]})
@@ -488,7 +586,28 @@
 
 
 
-(make-fn {:class-name "Thing"
+
+
+
+(run-multiple
+ '(defn thing [Type/INT_TYPE Type/INT_TYPE Type/INT_TYPE]
+    (plus-int (arg 0) (arg 1)))
+
+
+ ;; TODO: resolve types so this can be nicer
+ ;; Also have function invokation in the language
+ (list 'defn 'main [Type/VOID_TYPE]
+       (list 'print
+        (list 'invoke-static {:owner (Type/getType (Class/forName "thing"))
+                              :method (Method. "invoke" Type/INT_TYPE (into-array Type [Type/INT_TYPE Type/INT_TYPE]))}
+
+              1 2)))
+ )
+
+
+
+(make-fn {:type :fn
+          :class-name "Thing"
           :code
           '(plus-int 1 2)
           :return-type Type/INT_TYPE})
@@ -514,7 +633,7 @@
           :return-type Type/INT_TYPE})
 
 (linearize  ('invoke-static {:owner (Type/getType (Class/forName "Thing"))
-                           :method (Method. "invoke" Type/INT_TYPE (into-array Type []))}))
+                             :method (Method. "invoke" Type/INT_TYPE (into-array Type []))}))
 
 (make-fn {:class-name "CallOther"
           :code
