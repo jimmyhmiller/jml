@@ -217,11 +217,14 @@
         :else x))
     expr)))
 
+(defn java-array? [obj]
+  (.isArray (class obj)))
+
 (defn resolve-method-type [expr]
   (if (= (type expr) org.objectweb.asm.commons.Method)
     expr
     (let [[_ method-name return-type arg-types] expr
-          arg-types (if (.isArray (class arg-types)) arg-types
+          arg-types (if (java-array? arg-types) arg-types
                         (into-array Type (map resolve-type arg-types)))]
       (Method. method-name (resolve-type return-type) arg-types))))
 
@@ -237,10 +240,6 @@
         :int Type/INT_TYPE
         :long Type/LONG_TYPE
         :bool Type/BOOLEAN_TYPE
-
-        :Integer  (Type/getType (Class/forName "java.lang.Integer"))
-
-        ;; need to add handling Class
         (throw (ex-info (format  "[resolve-type] Unknown Keyword expr-type %s" expr-type) {:expr expr-type})))
       (= t java.lang.String) (Type/getType (Class/forName expr-type))
       :else
@@ -252,15 +251,6 @@
     owner (update :owner resolve-type)
     field-type (update :field-type resolve-type)
     method (update :method resolve-method-type)))
-
-
-
-#_(make-fn {:class-name "CallOther"
-          :code
-          (list 'invoke-static {:owner (Type/getType (Class/forName "Thing"))
-                                :method (Method. "invoke" Type/INT_TYPE (into-array Type []))})
-          :arg-types []
-          :return-type Type/INT_TYPE})
 
 
 (defn linearize* [code]
