@@ -217,8 +217,50 @@
         :else x))
     expr)))
 
+(defn resolve-method-type [expr]
+  (if (= (type expr) org.objectweb.asm.commons.Method)
+    expr
+    (let [[_ method-name return-type arg-types] expr
+          arg-types (if (.isArray (class arg-types)) arg-types
+                        (into-array Type (map resolve-type arg-types)))]
+      (Method. method-name (resolve-type return-type) arg-types))))
+
+(defn resolve-type [expr-type]
+  (let [t (type expr-type)]
+    (cond   ;;if expr is already of asm.Type
+      (= t Type) expr-type
+      (= t clojure.lang.Keyword)
+      (case expr-type
+        :string (Type/getType String)
+        :object (Type/getType Object)
+        :void Type/VOID_TYPE
+        :int Type/INT_TYPE
+        :long Type/LONG_TYPE
+        :bool Type/BOOLEAN_TYPE
+
+        :Integer  (Type/getType (Class/forName "java.lang.Integer"))
+
+        ;; need to add handling Class
+        (throw (ex-info (format  "[resolve-type] Unknown Keyword expr-type %s" expr-type) {:expr expr-type})))
+      (= t java.lang.String) (Type/getType (Class/forName expr-type))
+      :else
+      (throw (ex-info (format  "[resolve-type] Unknown type %s" expr-type) {:expr expr-type})))))
+
+(defn resolve-props-type [{:keys [type owner field-type result-type method] :as props}]
+  (cond-> props
+    type  (update :type resolve-type)
+    owner (update :owner resolve-type)
+    field-type (update :field-type resolve-type)
+    method (update :method resolve-method-type)))
 
 
+
+#_(make-fn {:class-name "CallOther"
+          :code
+          (list 'invoke-static {:owner (Type/getType (Class/forName "Thing"))
+                                :method (Method. "invoke" Type/INT_TYPE (into-array Type []))})
+          :arg-types []
+          :return-type Type/INT_TYPE})
 
 
 (defn linearize* [code]
@@ -233,7 +275,8 @@
                     (vector? props)
                     {}
 
-                    :else {:value props})]
+                    :else {:value props})
+        props (resolve-props-type props)]
 
     (cond (not (keyword? op))
           code
@@ -249,12 +292,15 @@
 
           :else (conj (into [] (mapcat linearize* children)) [op props]))))
 
+
+
+
 (defn linearize [expr]
   (linearize* (de-sexpr expr)))
 
 
 (defn generate-invoke-method [^ClassWriter writer {:keys [code return-type arg-types]}]
-  (let [method (Method. "invoke" return-type (into-array Type arg-types))
+  (let [method (Method. "invoke" (resolve-type return-type) (into-array Type (map resolve-type  arg-types)))
         gen (GeneratorAdapter. (int (+ Opcodes/ACC_PUBLIC Opcodes/ACC_STATIC)) method nil nil writer)]
     (reduce (fn [env line] (generate-code-with-env! gen line env)) {} code)
     (.endMethod ^GeneratorAdapter gen)))
@@ -586,22 +632,17 @@
 
 
 
-
-
-
 (run-multiple
- '(defn thing [Type/INT_TYPE Type/INT_TYPE Type/INT_TYPE]
+ '(defn thing2 [:int :int :int]
     (plus-int (arg 0) (arg 1)))
 
 
  ;; TODO: resolve types so this can be nicer
  ;; Also have function invokation in the language
- (list 'defn 'main [Type/VOID_TYPE]
-       (list 'print
-        (list 'invoke-static {:owner (Type/getType (Class/forName "thing"))
-                              :method (Method. "invoke" Type/INT_TYPE (into-array Type [Type/INT_TYPE Type/INT_TYPE]))}
-
-              1 2)))
+ '(defn main [:void]
+    (print (invoke-static {:owner "thing2"
+                           :method (Method. "invoke" :int [:int :int])}
+                          23 24)))
  )
 
 
@@ -693,7 +734,7 @@
            [:label {:value "exit"}]
            [:load-local {:index 0 :local-type Type/INT_TYPE}]
            [:return]]
-           :arg-types [Type/INT_TYPE]
+          :arg-types [Type/INT_TYPE]
           :return-type Type/INT_TYPE})
 
 (LoopThing/invoke 10)
