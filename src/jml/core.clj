@@ -231,9 +231,12 @@
 (defn resolve-type [expr-type]
   (let [t (type expr-type)]
     (cond   ;;if expr is already of asm.Type
-      (= t Type) expr-type
+      (= t Type)
+      expr-type
+
       (= t clojure.lang.Keyword)
       (case expr-type
+        :asm-type   (Type/getType Type) ;; :asm-type because having { :type :type } is a bit odd, don't you think?
         :string (Type/getType String)
         :object (Type/getType Object)
         :void Type/VOID_TYPE
@@ -241,7 +244,10 @@
         :long Type/LONG_TYPE
         :bool Type/BOOLEAN_TYPE
         (throw (ex-info (format  "[resolve-type] Unknown Keyword expr-type %s" expr-type) {:expr expr-type})))
-      (= t java.lang.String) (Type/getType (Class/forName expr-type))
+
+      (= t java.lang.String)
+      (Type/getType (Class/forName expr-type))
+
       :else
       (throw (ex-info (format  "[resolve-type] Unknown type %s" expr-type) {:expr expr-type})))))
 
@@ -586,11 +592,11 @@
       :fields [{:name "argIndex" :type :int}]}
      {:name "Math"
       :fields [{:name "op" :type :int}
-               {:name "opType" :type (Type/getType Type)}]}
+               {:name "opType" :type :asm-type}]}
      {:name "GetStaticField"
-      :fields [{:name "owner" :type (Type/getType Type)}
-               {:name "name" :type (Type/getType String)}
-               {:name "resultType" :type (Type/getType Type)}]}
+      :fields [{:name "owner" :type :asm-type}
+               {:name "name" :type :string}
+               {:name "resultType" :type :asm-type}]}
      {:name "Int"
       :fields [{:name "intValue" :type :int}]}
      {:name "Bool"
