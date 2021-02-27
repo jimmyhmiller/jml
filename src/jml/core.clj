@@ -583,7 +583,7 @@
      {:name "SubInt"
       :fields []}
      {:name "Arg"
-      :fields [{:name "argIndex" :type Type/INT_TYPE}]}
+      :fields [{:name "argIndex" :type :int}]}
      {:name "Math"
       :fields [{:name "op" :type :int}
                {:name "opType" :type (Type/getType Type)}]}
@@ -592,9 +592,9 @@
                {:name "name" :type (Type/getType String)}
                {:name "resultType" :type (Type/getType Type)}]}
      {:name "Int"
-      :fields [{:name "intValue" :type Type/INT_TYPE}]}
+      :fields [{:name "intValue" :type :int}]}
      {:name "Bool"
-      :fields [{:name "boolValue" :type Type/BOOLEAN_TYPE}]}]}))
+      :fields [{:name "boolValue" :type :bool}]}]}))
 
 [(Code/PlusInt)
  (Code/SubInt)
