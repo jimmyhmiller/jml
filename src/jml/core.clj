@@ -460,10 +460,7 @@
 
 ;; NOTE: All names type combinations must be unique
 (defn make-enum [{:keys [class-name variants] :as description}]
-  (let [#_#_{:keys [class-name variants] :as description} (update description :variants
-                                                            (partial map
-                                                                     (comp (partial map resolve-props-type) :fields)))
-        writer (ClassWriter. (int (+ ClassWriter/COMPUTE_FRAMES ClassWriter/COMPUTE_MAXS)))]
+  (let [writer (ClassWriter. (int (+ ClassWriter/COMPUTE_FRAMES ClassWriter/COMPUTE_MAXS)))]
     (initialize-class writer class-name)
     (generate-default-constructor writer)
     (make-field writer {:name "tag" :type Type/INT_TYPE})
