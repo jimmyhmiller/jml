@@ -217,8 +217,48 @@
         :else x))
     expr)))
 
+(defn java-array? [obj]
+  (.isArray (class obj)))
+
+(defn resolve-type [expr-type]
+  (let [t (type expr-type)]
+    (cond   ;;if expr is already of asm.Type
+      (= t Type)
+      expr-type
+
+      (= t clojure.lang.Keyword)
+      (case expr-type
+        :asm-type   (Type/getType Type) ;; :asm-type because having { :type :type } is a bit odd, don't you think?
+        :string (Type/getType String)
+        :object (Type/getType Object)
+        :void Type/VOID_TYPE
+        :int Type/INT_TYPE
+        :long Type/LONG_TYPE
+        :bool Type/BOOLEAN_TYPE
+        (throw (ex-info (format  "[resolve-type] Unknown Keyword expr-type %s" expr-type) {:expr expr-type})))
+
+      (= t java.lang.String)
+      (Type/getType (Class/forName expr-type))
+
+      :else
+      (throw (ex-info (format  "[resolve-type] Unknown type %s" expr-type) {:expr expr-type})))))
+
+(defn resolve-method-type [expr]
+  (if (= (type expr) org.objectweb.asm.commons.Method)
+    expr
+    (let [[_ method-name return-type arg-types] expr
+          arg-types (if (java-array? arg-types) arg-types
+                        (into-array Type (map resolve-type arg-types)))]
+      (Method. method-name (resolve-type return-type) arg-types))))
 
 
+
+(defn resolve-props-type [{:keys [type owner field-type result-type method] :as props}]
+  (cond-> props
+    type  (update :type resolve-type)
+    owner (update :owner resolve-type)
+    field-type (update :field-type resolve-type)
+    method (update :method resolve-method-type)))
 
 
 (defn linearize* [code]
@@ -233,7 +273,8 @@
                     (vector? props)
                     {}
 
-                    :else {:value props})]
+                    :else {:value props})
+        props (resolve-props-type props)]
 
     (cond (not (keyword? op))
           code
@@ -249,12 +290,15 @@
 
           :else (conj (into [] (mapcat linearize* children)) [op props]))))
 
+
+
+
 (defn linearize [expr]
   (linearize* (de-sexpr expr)))
 
 
 (defn generate-invoke-method [^ClassWriter writer {:keys [code return-type arg-types]}]
-  (let [method (Method. "invoke" return-type (into-array Type arg-types))
+  (let [method (Method. "invoke" (resolve-type return-type) (into-array Type (map resolve-type  arg-types)))
         gen (GeneratorAdapter. (int (+ Opcodes/ACC_PUBLIC Opcodes/ACC_STATIC)) method nil nil writer)]
     (reduce (fn [env line] (generate-code-with-env! gen line env)) {} code)
     (.endMethod ^GeneratorAdapter gen)))
@@ -270,7 +314,7 @@
 
 
 (defn make-field [^ClassWriter writer {:keys [name type]}]
-  (let [field (.visitField writer Opcodes/ACC_PUBLIC name (.getDescriptor ^Type type) nil nil)]
+  (let [field (.visitField writer Opcodes/ACC_PUBLIC name (.getDescriptor ^Type (resolve-type type)) nil nil)]
     (.visitEnd field)))
 
 (defn make-field-assignment [^GeneratorAdapter gen this-type index {:keys [name type]}]
@@ -300,8 +344,9 @@
     (.returnValue gen)
     (.endMethod gen)))
 
-(defn make-struct [{:keys [class-name fields] :as description}]
-  (let [writer (ClassWriter. (int (+ ClassWriter/COMPUTE_FRAMES ClassWriter/COMPUTE_MAXS)))]
+(defn make-struct [description]
+  (let [{:keys [class-name fields] :as description} (update description :fields (partial map resolve-props-type))
+        writer (ClassWriter. (int (+ ClassWriter/COMPUTE_FRAMES ClassWriter/COMPUTE_MAXS)))]
     (initialize-class writer class-name)
     (generate-default-constructor writer)
     (run! (partial make-field writer) fields)
@@ -349,7 +394,7 @@
           (.push gen (str "(" class-name "/" name (when-not (empty? fields) " ")))
           (.invokeConstructor gen sb-type sb-ctor)
 
-          (run-indexed! (partial gen-field-to-string gen this-type sb-type sb-append (count fields)) fields)
+          (run-indexed! (partial gen-field-to-string gen this-type sb-type sb-append (count fields)) (map resolve-props-type fields))
 
           (.push gen ")")
           (.invokeVirtual gen sb-type sb-append)
@@ -386,6 +431,7 @@
 (defn make-enum-factory [writer class-name {:keys [name fields tagName tag]}]
   (let [ ;; This is probably not always true, especially with namespacing.
         this-type (Type/getType (str "L" class-name ";"))
+        fields (map resolve-props-type fields)
         method (Method. name this-type (into-array Type (map :type fields)))
         gen (GeneratorAdapter. (int (+ Opcodes/ACC_PUBLIC Opcodes/ACC_STATIC)) method nil nil writer)]
     (.visitCode gen)
@@ -422,7 +468,7 @@
     (make-field writer {:name "tag" :type Type/INT_TYPE})
     (make-field writer {:name "tagName" :type (Type/getType String)})
     (make-to-string writer description)
-    (run! (partial make-field writer) (set (mapcat :fields variants)))
+    (run! (partial make-field writer) (set (mapcat (comp resolve-props-type  :fields) variants)))
     (run-indexed! (partial make-enum-variant writer class-name) variants)
     (.visitEnd writer)
     ;; Should have a way to return class and not print
@@ -485,12 +531,12 @@
 
 (def Color (make-enum {:class-name "Color"
                        :variants [{:name "RGB"
-                                   :fields [{:name "red" :type Type/INT_TYPE}
-                                            {:name "green" :type Type/INT_TYPE}
-                                            {:name "blue" :type Type/INT_TYPE}]}
+                                   :fields [{:name "red" :type :int}
+                                            {:name "green" :type :int}
+                                            {:name "blue" :type :int}]}
                                   {:name "CMYK"
-                                   :fields [{:name "cyan" :type Type/INT_TYPE}
-                                            {:name "magenta" :type Type/INT_TYPE}
+                                   :fields [{:name "cyan" :type :int}
+                                            {:name "magenta" :type :int}
                                             {:name "yellow" :type Type/INT_TYPE}
                                             {:name "key" :type Type/INT_TYPE}]}]}))
 
@@ -542,18 +588,18 @@
      {:name "SubInt"
       :fields []}
      {:name "Arg"
-      :fields [{:name "argIndex" :type Type/INT_TYPE}]}
+      :fields [{:name "argIndex" :type :int}]}
      {:name "Math"
-      :fields [{:name "op" :type Type/INT_TYPE}
-               {:name "opType" :type (Type/getType Type)}]}
+      :fields [{:name "op" :type :int}
+               {:name "opType" :type :asm-type}]}
      {:name "GetStaticField"
-      :fields [{:name "owner" :type (Type/getType Type)}
-               {:name "name" :type (Type/getType String)}
-               {:name "resultType" :type (Type/getType Type)}]}
+      :fields [{:name "owner" :type :asm-type}
+               {:name "name" :type :string}
+               {:name "resultType" :type :asm-type}]}
      {:name "Int"
-      :fields [{:name "intValue" :type Type/INT_TYPE}]}
+      :fields [{:name "intValue" :type :int}]}
      {:name "Bool"
-      :fields [{:name "boolValue" :type Type/BOOLEAN_TYPE}]}]}))
+      :fields [{:name "boolValue" :type :bool}]}]}))
 
 [(Code/PlusInt)
  (Code/SubInt)
@@ -568,7 +614,7 @@
 
 
 (make-struct {:class-name "Point"
-              :fields [{:name "x" :type Type/INT_TYPE}
+              :fields [{:name "x" :type :int}
                        {:name "y" :type Type/INT_TYPE}]})
 
 
@@ -586,22 +632,17 @@
 
 
 
-
-
-
 (run-multiple
- '(defn thing [Type/INT_TYPE Type/INT_TYPE Type/INT_TYPE]
+ '(defn thing2 [:int :int :int]
     (plus-int (arg 0) (arg 1)))
 
 
  ;; TODO: resolve types so this can be nicer
  ;; Also have function invokation in the language
- (list 'defn 'main [Type/VOID_TYPE]
-       (list 'print
-        (list 'invoke-static {:owner (Type/getType (Class/forName "thing"))
-                              :method (Method. "invoke" Type/INT_TYPE (into-array Type [Type/INT_TYPE Type/INT_TYPE]))}
-
-              1 2)))
+ '(defn main [:void]
+    (print (invoke-static {:owner "thing2"
+                           :method (Method. "invoke" :int [:int :int])}
+                          23 19)))
  )
 
 
@@ -610,7 +651,7 @@
           :class-name "Thing"
           :code
           '(plus-int 1 2)
-          :return-type Type/INT_TYPE})
+          :return-type :int})
 
 
 (make-fn {:class-name "BoolReturn"
@@ -637,7 +678,7 @@
 
 (make-fn {:class-name "CallOther"
           :code
-          (list 'invoke-static {:owner (Type/getType (Class/forName "Thing"))
+          (list 'invoke-static {:owner "Thing"
                                 :method (Method. "invoke" Type/INT_TYPE (into-array Type []))})
           :arg-types []
           :return-type Type/INT_TYPE})
@@ -693,7 +734,7 @@
            [:label {:value "exit"}]
            [:load-local {:index 0 :local-type Type/INT_TYPE}]
            [:return]]
-           :arg-types [Type/INT_TYPE]
+          :arg-types [Type/INT_TYPE]
           :return-type Type/INT_TYPE})
 
 (LoopThing/invoke 10)
