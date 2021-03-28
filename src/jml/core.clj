@@ -220,14 +220,6 @@
 (defn java-array? [obj]
   (.isArray (class obj)))
 
-(defn resolve-method-type [expr]
-  (if (= (type expr) org.objectweb.asm.commons.Method)
-    expr
-    (let [[_ method-name return-type arg-types] expr
-          arg-types (if (java-array? arg-types) arg-types
-                        (into-array Type (map resolve-type arg-types)))]
-      (Method. method-name (resolve-type return-type) arg-types))))
-
 (defn resolve-type [expr-type]
   (let [t (type expr-type)]
     (cond   ;;if expr is already of asm.Type
@@ -250,6 +242,16 @@
 
       :else
       (throw (ex-info (format  "[resolve-type] Unknown type %s" expr-type) {:expr expr-type})))))
+
+(defn resolve-method-type [expr]
+  (if (= (type expr) org.objectweb.asm.commons.Method)
+    expr
+    (let [[_ method-name return-type arg-types] expr
+          arg-types (if (java-array? arg-types) arg-types
+                        (into-array Type (map resolve-type arg-types)))]
+      (Method. method-name (resolve-type return-type) arg-types))))
+
+
 
 (defn resolve-props-type [{:keys [type owner field-type result-type method] :as props}]
   (cond-> props
