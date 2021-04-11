@@ -27,7 +27,7 @@
   (decompile java-decompiler byte-array class-name))
 
 (defn to-bytecode [byte-array class-name]
-   (decompile bytecode-decompiler byte-array class-name))
+  (decompile bytecode-decompiler byte-array class-name))
 
 (defn print-and-load-bytecode [writer class-name]
   (let [byteArray (.toByteArray ^ClassWriter writer)]
@@ -40,6 +40,16 @@
 
 (defn print-and-load-java [writer class-name]
   (let [byteArray (.toByteArray ^ClassWriter writer)]
+    (jml.decompile/to-java byteArray class-name)
+    (.defineClass ^clojure.lang.DynamicClassLoader
+                  (clojure.lang.DynamicClassLoader.)
+                  (.replace ^String class-name \/ \.)
+                  byteArray
+                  nil)))
+
+(defn print-and-load-all [writer class-name]
+  (let [byteArray (.toByteArray ^ClassWriter writer)]
+    (jml.decompile/to-bytecode byteArray class-name)
     (jml.decompile/to-java byteArray class-name)
     (.defineClass ^clojure.lang.DynamicClassLoader
                   (clojure.lang.DynamicClassLoader.)
