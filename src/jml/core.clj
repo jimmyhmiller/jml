@@ -71,7 +71,10 @@
       (.returnValue gen))))
 
 
+
+
 (defn generate-code-with-env! [^GeneratorAdapter gen command env]
+
   (let [code (second command)]
     (case (first command)
       :label
@@ -203,7 +206,6 @@
     node))
 
 
-
 (defn de-sexpr [expr]
   (walk/postwalk
    (fn [x] (if (reduced? x)
@@ -217,6 +219,9 @@
               (reduced [:arg {:value (second x)}])
               (and (seq? x) (symbol? (first x)) (string/starts-with? (name (first x)) ".-"))
               (vec (concat (rest x) [[:get-field {:name (subs (name (first x)) 2)}]] ))
+              ;; Clean up to be consistent
+              (and (seq? x) (symbol? (first x)) (string/starts-with? (full-symbol-name (first x)) "."))
+              (vec (concat (rest x) [[:invoke-virtual {:name (first x)}]] ))
               (map? x) (reduced x)
               (seq? x) (vec x)
               (and (vector? x) (keyword? (first x))) (reduced x)
@@ -231,6 +236,8 @@
     expr)))
 
 
+
+
 (defn java-array? [obj]
   (.isArray (class obj)))
 
@@ -240,7 +247,15 @@
       (= t Type)
       expr-type
 
-      (= t clojure.lang.Keyword)
+      (symbol? expr-type)
+      (case expr-type
+        void Type/VOID_TYPE
+        int Type/INT_TYPE
+        long Type/LONG_TYPE
+        boolean Type/BOOLEAN_TYPE
+        (Type/getType ^Class (resolve expr-type)))
+
+      (keyword? expr-type)
       (case expr-type
         :asm-type (Type/getType Type) ;; :asm-type because having { :type :type } is a bit odd, don't you think?
         :string (Type/getType String)
@@ -249,13 +264,18 @@
         :int Type/INT_TYPE
         :long Type/LONG_TYPE
         :bool Type/BOOLEAN_TYPE
-        (throw (ex-info (format  "[resolve-type] Unknown Keyword expr-type %s" expr-type) {:expr expr-type})))
+
+        (throw (ex-info (format  "[resolve-type] Unknown type expr-type %s" expr-type) {:expr expr-type})))
 
       (= t java.lang.String)
-      (Type/getType (Class/forName expr-type))
+      (Type/getType (resolve (symbol expr-type)))
+
+      (= t java.lang.Class)
+      (Type/getType expr-type)
 
       :else
       (throw (ex-info (format  "[resolve-type] Unknown type %s" expr-type) {:expr expr-type})))))
+
 
 (defn resolve-method-type [expr]
   (if (= (type expr) org.objectweb.asm.commons.Method)
@@ -292,7 +312,10 @@
                     :else {:value props})
         props (resolve-props-type props)]
 
-    (cond (not (keyword? op))
+    (cond (vector? op)
+          (into [] (mapcat linearize* code))
+
+          (not (keyword? op))
           code
 
           (empty? children)
@@ -305,6 +328,7 @@
           (into [] (mapcat linearize* children))
 
           :else (conj (into [] (mapcat linearize* children)) [op props]))))
+
 
 
 (defn linearize [expr]
@@ -327,8 +351,23 @@
          (filter (comp #{(symbol field-name)} :name))
          first
          :type
-         name
          resolve-type)))
+
+(defn get-method-types [class-asm-type method-name method-args]
+  (let [klass (Class/forName
+               (.getClassName ^Type class-asm-type))
+        methods (->> (reflect/reflect klass)
+                     :members
+                     (filter (comp #{(symbol method-name)} :name))
+                     (filter (fn [{:keys [parameter-types]}]
+                               (or (nil? method-args)
+                                   (= method-args parameter-types)))))
+        _ (assert (= 1 (count methods)) (format "Method overloaded, need to deal with this %s %s" (.getName klass) method-name))
+        {:keys [return-type parameter-types]}
+        (first methods)]
+    {:owner (resolve-type klass)
+     :method (Method. method-name (resolve-type return-type)
+                      (into-array Type (map resolve-type parameter-types)))}))
 
 
 (defn infer-type-get-field [arg-types [op-type value] instruction]
@@ -340,12 +379,31 @@
     instruction))
 
 
+
+(defn get-owner [sym]
+  (resolve-type (subs (namespace sym) 1)))
+
+
+(defn get-method-name [sym]
+  (first (string/split (name sym) #"\$")))
+
+(defn get-method-arg-types [sym]
+  (if (string/includes? (name sym) "$")
+    (mapv symbol (rest (string/split (name sym) #"\$")))
+    nil))
+
+
 (defn infer-interop-types [arg-types linearized-code]
   (reduce (fn [code current-instruction]
             (conj
              code
              (case (first current-instruction)
                :get-field (infer-type-get-field arg-types (last code) current-instruction)
+               :invoke-virtual (do
+                                 (assoc current-instruction 1 (get-method-types
+                                                                 (get-owner (:name (second current-instruction)))
+                                                                 (get-method-name (:name (second current-instruction)))
+                                                                 (get-method-arg-types  (:name (second current-instruction))))))
                current-instruction)
              ))
           []
@@ -358,7 +416,10 @@
     (generate-default-constructor writer)
     (generate-invoke-method writer (assoc description :code (infer-interop-types arg-types code)))
     (.visitEnd writer)
+
     (jml.decompile/print-and-load-all writer class-name)))
+
+
 
 (defn make-field [^ClassWriter writer {:keys [name type]}]
   (let [field (.visitField writer Opcodes/ACC_PUBLIC name (.getDescriptor ^Type (resolve-type type)) nil nil)]
@@ -564,42 +625,6 @@
 
 
 
-(def Color (make-enum {:class-name "Color"
-                       :variants [{:name "RGB"
-                                   :fields [{:name "red" :type :int}
-                                            {:name "green" :type :int}
-                                            {:name "blue" :type :int}]}
-                                  {:name "CMYK"
-                                   :fields [{:name "cyan" :type :int}
-                                            {:name "magenta" :type :int}
-                                            {:name "yellow" :type Type/INT_TYPE}
-                                            {:name "key" :type Type/INT_TYPE}]}]}))
-
-
-
-(def c1 (Color/RGB 255 42 12))
-(def c2 (Color/CMYK 1 2 3 4))
-
-
-[(.red ^Color c1)
- (.green ^Color c1)
- (.blue ^Color c1)
- (.tag ^Color c1)
- (.tagName ^Color c1)
- (.toString ^Color c1)
-
- (.cyan ^Color c2)
- (.magenta ^Color c2)
- (.yellow ^Color c2)
- (.key ^Color c2)
- (.tag ^Color c2)
- (.tagName ^Color c2)
- (.toString ^Color c2)]
-
-
-
-
-
 ;; TODO
 ;; Syntax for static invoke
 ;; Sytax for method invoke
@@ -646,14 +671,16 @@
       :fields [{:name "boolValue" :type :bool}]}
      {:name "Int"
       :fields [{:name "intValue" :type :int}]}
+     {:name "String"
+      :fields [{:name "stringValue" :type :string}]}
      {:name "GetField"
       :fields [{:name "owner" :type :asm-type}
                {:name "name" :type :string}
-               {:name "field-type" :type :asm-type}]}
+               {:name "fieldType" :type :asm-type}]}
      {:name "PutField"
       :fields [{:name "owner" :type :asm-type}
                {:name "name" :type :string}
-               {:name "field-type" :type :asm-type}]}
+               {:name "fieldType" :type :asm-type}]}
      {:name "Dup"
       :fields []}
      {:name "Pop"
@@ -665,222 +692,73 @@
 
 
 
-
 (do
 
-  (def generateCode-code
-    '(if (= (invoke-virtual {:owner :string
-                             :method (Method. "equals" :bool [:object])}
-                            (.-tagName (arg 0))
-                            "Int")
-            true)
-       42
-       0)
+  (def self-compile
+    ;; Need math operators
+    '(if (.String/equals (.-tagName (arg 0)) "Arg")
+       (.GeneratorAdapter/loadArg (arg 1)  (.-argIndex (arg 0)))
+       (if (.String/equals (.-tagName (arg 0)) "Math")
+         (.GeneratorAdapter/math (arg 1) (.-op (arg 0)) (.-opType (arg 0)))
+         (if (.String/equals (.-tagName (arg 0)) "GetStaticField")
+           (.GeneratorAdapter/getStatic (arg 1) (.-owner (arg 0)) (.-name (arg 0)) (.-resultType (arg 0)))
+           (if (.String/equals (.-tagName (arg 0)) "InvokeStatic")
+             (.GeneratorAdapter/invokeStatic (arg 1) (.-owner (arg 0)) (.-method (arg 0)))
+             (if (.String/equals (.-tagName (arg 0)) "InvokeVirtual")
+               (.GeneratorAdapter/invokeVirtual (arg 1) (.-owner (arg 0)) (.-method (arg 0)))
+               (if (.String/equals (.-tagName (arg 0)) "InvokeConstructor")
+                 (.GeneratorAdapter/invokeConstructor (arg 1) (.-owner (arg 0)) (.-method (arg 0)))
+                 (if (.String/equals (.-tagName (arg 0)) "New")
+                   (.GeneratorAdapter/newInstance (arg 1) (.-owner (arg 0)))
+                   (if (.String/equals (.-tagName (arg 0)) "Bool")
+                     (.GeneratorAdapter/push$boolean (arg 1) (.-boolValue (arg 0)))
+                     (if (.String/equals (.-tagName (arg 0)) "Int")
+                       (.GeneratorAdapter/push$int (arg 1) (.-intValue (arg 0)))
+                       (if (.String/equals (.-tagName (arg 0)) "String")
+                         (.GeneratorAdapter/push$java.lang.String (arg 1) ^String (.-stringValue (arg 0)))
+                         (if (.String/equals (.-tagName (arg 0)) "GetField")
+                           (.GeneratorAdapter/getField (arg 1) (.-owner (arg 0)) (.-name (arg 0)) (.-fieldType (arg 0)))
+                           (if (.String/equals (.-tagName (arg 0)) "PutField")
+                             (.GeneratorAdapter/putField (arg 1) (.-owner (arg 0)) (.-name (arg 0)) (.-fieldType (arg 0)))
+                             (if (.String/equals (.-tagName (arg 0)) "Dup")
+                               (.GeneratorAdapter/dup (arg 1))
+                               (if (.String/equals (.-tagName (arg 0)) "Pop")
+                                 (.GeneratorAdapter/pop (arg 1))
+                                 (if (.String/equals (.-tagName (arg 0)) "Return")
+                                   (.GeneratorAdapter/returnValue (arg 1))
+                                   ;; Hack for returning void
+                                   (.GeneratorAdapter/returnValue (arg 1)))))))))))))))))
+
+    #_'(if (.String/equals (.-tagName (arg 0)) "Int")
+         42
+         0)
     )
+
+  (linearize self-compile)
 
   (make-fn {:class-name "generateCode"
             :code
-            generateCode-code
-            :arg-types [(Type/getType (Class/forName "Code"))]
-            :return-type Type/INT_TYPE})
+            self-compile
+            :arg-types [(Type/getType (Class/forName "Code")) (Type/getType (resolve 'GeneratorAdapter))]
+            :return-type Type/VOID_TYPE})
 
 
-  [(generateCode/invoke (Code/Int 2))
-   (generateCode/invoke (Code/Bool true))])
+  (let [class-name "MyAwesomeCode"
+        writer (ClassWriter. (int (+ ClassWriter/COMPUTE_FRAMES ClassWriter/COMPUTE_MAXS)))
+        method (Method. "invoke" Type/INT_TYPE (into-array Type []))
+        gen (GeneratorAdapter. (int (+ Opcodes/ACC_PUBLIC Opcodes/ACC_STATIC)) method nil nil writer)]
+    (initialize-class writer class-name)
+
+    (generate-default-constructor writer)
+    (generateCode/invoke (Code/Int 22) gen)
+    (generateCode/invoke (Code/Return) gen)
+    (.endMethod ^GeneratorAdapter gen)
+    (.visitEnd writer)
+    (jml.decompile/print-and-load-all writer class-name))
 
 
-[(Code/PlusInt)
- (Code/SubInt)
- (Code/Arg 0)
- (Code/Math GeneratorAdapter/ADD Type/INT_TYPE)
- (Code/GetStaticField Type/INT_TYPE "thing" Type/INT_TYPE)
- (Code/Int 1)
- (Code/Bool true)
- (Code/InvokeStatic Type/INT_TYPE (Method. "invoke" Type/INT_TYPE (into-array Type [])))]
+ #_ [
+   #_(generateCode/invoke (Code/Bool true))])
 
 
-(make-struct {:class-name "Point"
-              :fields [{:name "x" :type :int}
-                       {:name "y" :type Type/INT_TYPE}]})
-
-(comment
-
-
-  (def p (Point.))
-  (def p2 (Point. 1 2))
-
-
-  (set! (.x ^Point p) 2)
-  (set! (.y ^Point p) 4)
-
-  (.y ^Point p2)
-  (.x ^Point p2)
-
-
-
-  (run-multiple
-   '(defn thing2 [:int :int :int]
-      (plus-int (arg 0) (arg 1)))
-
-
-   ;; TODO: resolve types so this can be nicer
-   ;; Also have function invokation in the language
-   '(defn main [:int :int :void]
-      (print (invoke-static {:owner "thing2"
-                             :method (Method. "invoke" :int [:int :int])}
-                            23 19)))
-   )
-
-
-
-
-  (make-fn {:type :fn
-            :class-name "Thing"
-            :code
-            '(plus-int 1 2)
-            :return-type :int})
-
-  (Thing/invoke)
-
-
-  (make-fn {:class-name "BoolReturn"
-            :code true
-            :return-type Type/BOOLEAN_TYPE})
-
-  (BoolReturn/invoke)
-
-  (make-fn {:class-name "ArgReturn"
-            :code
-            '(arg 0)
-            :arg-types [Type/INT_TYPE]
-            :return-type Type/INT_TYPE})
-
-  (make-fn {:class-name "TwoArgAdd3Return"
-            :code
-            '(plus-int 3
-                       (plus-int (arg 0) (arg 1)))
-            :arg-types [Type/INT_TYPE Type/INT_TYPE]
-            :return-type Type/INT_TYPE})
-
-
-  (make-fn {:class-name "CallOther"
-            :code
-            (list 'invoke-static {:owner "Thing"
-                                  :method (Method. "invoke" Type/INT_TYPE (into-array Type []))})
-            :arg-types []
-            :return-type Type/INT_TYPE})
-
-
-  (IfReturn/invoke true)
-
-
-  (make-fn {:class-name "IfGreaterThanZeroReturn"
-            :code
-            '(return
-              (if (> (arg 0) 0)
-                42
-                0))
-            :arg-types [Type/INT_TYPE]
-            :return-type Type/INT_TYPE})
-
-
-  (IfGreaterThanZeroReturn/invoke 2)
-
-
-
-  (make-fn {:class-name "LoopThing"
-            :code
-            [[:int {:value 0}]
-             [:store-local {:index 0 :local-type Type/INT_TYPE}]
-             [:label {:value "top-of-loop"}]
-             [:load-local {:index 0 :local-type Type/INT_TYPE}]
-             [:arg {:value 0}]
-             [:jump-equal {:value "exit" :compare-type Type/INT_TYPE}]
-             [:load-local {:index 0 :local-type Type/INT_TYPE}]
-             [:print]
-             [:int {:value 1}]
-             [:plus-int]
-             [:store-local {:index 0 :local-type Type/INT_TYPE}]
-             [:jump {:value "top-of-loop"}]
-
-             [:label {:value "exit"}]
-             [:load-local {:index 0 :local-type Type/INT_TYPE}]
-             [:return]]
-            :arg-types [Type/INT_TYPE]
-            :return-type Type/INT_TYPE})
-
-  (LoopThing/invoke 10)
-
-
-  ;; Be careful about having different numbers of items on stack on different code paths.
-
-  (make-fn {:class-name "RecursionThing"
-            :code
-            [[:int {:value 0}]
-             [:arg {:value 0}]
-             [:jump-equal {:value "exit" :compare-type Type/INT_TYPE}]
-
-             [:int {:value -1}]
-             [:arg {:value 0}]
-             [:plus-int]
-             [:print]
-             [:invoke-static {:owner (Type/getType "LRecursionThing;")
-                              :method (Method. "invoke" Type/INT_TYPE
-                                               (into-array Type [Type/INT_TYPE]))}]
-             [:return]
-
-             [:label {:value "exit"}]
-             [:arg {:value 0}]
-             [:return]]
-            :arg-types [Type/INT_TYPE]
-            :return-type Type/INT_TYPE})
-
-
-  (RecursionThing/invoke 10))
-
-
-
-
-(comment
-
-  (require '[clojure.reflect :as reflect])
-  (reflect/reflect (Class/forName "Code"))
-
-  (reflect/reflect (Code.))
-
-  (require '[clj-java-decompiler.core :as decompiler])
-
-
-  (decompiler/disassemble (Thing.))
-
-(decompiler/disassemble
-   (let [x 1]
-     (case x
-       1 true
-       2 false
-       3)))
-
-
-  (decompiler/disassemble
-   (defn thing [x]
-     (if (zero? x)
-       0
-       (thing (dec x)))))
-
-
-
-  {:already-linear (linearize [[:int {:value 42}]])
-   :children-empty (linearize [:const-thing {} []])
-   :simple-plus (linearize [:plus-int {}
-                            [:int {:value 31}]
-                            [:int {:value 32}]])
-   :complicated-plus (linearize [:plus-int {}
-                                 [:int {:value 1}]
-                                 [:plus-int {} [:int {:value 2}] [:int {:value 3}]]])
-   :complicated-plus' (linearize [:plus-int
-                                  [:int {:value 1}]
-                                  [:plus-int [:int {:value 2}] [:int {:value 3}]]])
-   :complicated-plus'' (linearize [:plus-int
-                                   [:int {:value 1}]
-                                   [:plus-int [:int 2] [:int {:value 3}]]])}
-  )
+(MyAwesomeCode/invoke)
