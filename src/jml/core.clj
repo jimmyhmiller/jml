@@ -14,7 +14,7 @@
       (= t Type)
       expr-type
 
-      (or (symbol? expr-type) (keyword? expr-type))
+      (or (symbol? expr-type) (keyword? expr-type) (string? expr-type))
       (case (symbol expr-type)
         asm-type (Type/getType Type) ;; :asm-type because having { :type :type } is a bit odd, don't you think?
         void Type/VOID_TYPE
@@ -23,13 +23,10 @@
         boolean Type/BOOLEAN_TYPE
         bool Type/BOOLEAN_TYPE
         string (Type/getType String)
-        (let [resolved (resolve expr-type)]
+        (let [resolved (resolve (symbol expr-type))]
           (if resolved
             (Type/getType ^Class resolved)
-            (throw (ex-info "Cannot resolve type" {:type expr-type})))))
-
-      (= t java.lang.String)
-      (Type/getType (resolve (symbol expr-type)))
+            (throw (ex-info "Cannot resolve type  from symbol" {:type expr-type})))))
 
       (= t java.lang.Class)
       (Type/getType expr-type)
@@ -122,16 +119,17 @@
                              "cond requires an even number of forms"))
     (and  (= (count clauses) 2) (= (first clauses) :else))
     (second clauses)
-    
+
     (= (count clauses) 2)
     (throw (IllegalArgumentException. "We only have two armed ifs"))
-    
+
     (not (empty? clauses))
     (list 'if (first clauses)
           (if (next clauses)
             (second clauses)
             (throw (ex-info "Even number " {:clauses clauses})))
           (expand-cond (cons 'cond (next (next clauses)))))))
+
 
 
 
@@ -148,7 +146,7 @@
               (and (seq? x) (= (first x) 'arg))
               (reduced [:arg {:value (second x)}])
               (and (seq? x) (symbol? (first x)) (= (first x) 'cond))
-              (do (prn "expanding" x)(expand-cond x))
+              (de-sexpr (expand-cond x))
               (and (seq? x) (symbol? (first x)) (string/starts-with? (name (first x)) ".-"))
               (vec (concat (rest x) [[:get-field {:name (subs (name (first x)) 2)}]] ))
               (and (seq? x) (symbol? (first x)) (string/starts-with? (full-symbol-name (first x)) "."))
@@ -167,7 +165,6 @@
           (with-meta result (meta x))
           result)))
     expr)))
-
 
 
 
@@ -271,31 +268,37 @@
              code
              (case (first current-instruction)
                :get-field (infer-type-get-field arg-types (last code) current-instruction)
-               :invoke-virtual 
+               :invoke-virtual
                (assoc current-instruction 1 (get-method-types
                                              (get-owner (:name (second current-instruction)))
                                              (get-method-name (:name (second current-instruction)))
                                              (get-method-arg-types (:name (second current-instruction)))))
                :invoke-static
-               (do
-                 (println current-instruction)
-                 (assoc current-instruction 1 (get-method-types
-                                               (resolve-type (namespace (:name (second current-instruction))))
-                                               (get-method-name (:name (second current-instruction)))
-                                               (get-method-arg-types  (:name (second current-instruction))))))
+
+               (assoc current-instruction 1 (get-method-types
+                                             (resolve-type (namespace (:name (second current-instruction))))
+                                             (get-method-name (:name (second current-instruction)))
+                                             (get-method-arg-types  (:name (second current-instruction)))))
                current-instruction)))
           []
           linearized-code))
 
+(defn log [x]
+  (println (cons 'do x) (type x))
+  (prn x)
+  x)
 
-(defn process-defn [[_ name types body]]
+
+
+
+(defn process-defn [[_ fn-name types & body]]
   (let [arg-types (mapv resolve-type (butlast types))]
     {:type :fn
-     :class-name (clojure.core/name name)
+     :class-name (string/replace (name fn-name) "." "/")
      :arg-types arg-types
      :return-type (resolve-type (last types))
      :code (concat (infer-interop-types arg-types
-                                        (linearize body))
+                                        (linearize (cons 'do  body)))
                    [[:return]])}))
 
 (defn process-enum [[_ enum-name & variants]]
@@ -307,7 +310,7 @@
               :fields []}
              {:name (str (first variant))
               :fields (mapv (fn [[name type]]
-                              {:name (str name) :type (resolve-type  type)})
+                              {:name (str name) :type (resolve-type type)})
                             (partition 2 (rest variant)))}))
          variants)})
 
@@ -368,8 +371,8 @@
              fieldType asm-type))
 
 
- (defn generateCode [org.objectweb.asm.commons.GeneratorAdapter lang.Code void]
-   
+ (defn lang.generateCode [org.objectweb.asm.commons.GeneratorAdapter lang.Code void]
+
    (cond
      (.String/equals (.-tagName (arg 1)) "Arg")
      (.GeneratorAdapter/loadArg (arg 0)  (.-argIndex (arg 1)))
@@ -419,26 +422,26 @@
      ;; Hack for returning void
      :else (.GeneratorAdapter/returnValue (arg 0))))
 
-
- (defn parseThatInt [string int]
+ (defn lang.parseThatInt [string int]
    (Integer/parseInt$java.lang.String (arg 0)))
 
- 
+
+ (defn lang.myGenerateCode [GeneratorAdapter void]
+   (lang.generateCode/invoke (arg 0) (lang.Code/Int 42))
+   (lang.generateCode/invoke (arg 0) (lang.Code/Return)))
+
  )
 
 
-(parseThatInt/invoke "42")
+
+
+(lang.parseThatInt/invoke "42")
 
 
 (do
 
   (backend/make-fn-with-callback
-   "MyAwesomeCode"
-   (fn [gen]
-     (generateCode/invoke gen (lang.Code/Int 42))
-     (generateCode/invoke gen (lang.Code/Return) )))
+   "lang2.MyAwesomeCode"
+   #(lang.myGenerateCode/invoke %))
 
-  (MyAwesomeCode/invoke))
-
-
-
+  (lang2.MyAwesomeCode/invoke))
