@@ -335,7 +335,7 @@
 
 
 (defn make-fn-with-callback [name callback]
-  (let [class-name "MyAwesomeCode"
+  (let [class-name (string/replace name "." "/")
         writer (ClassWriter. (int (+ ClassWriter/COMPUTE_FRAMES ClassWriter/COMPUTE_MAXS)))
         method (Method. "invoke" Type/INT_TYPE (into-array Type []))
         gen (GeneratorAdapter. (int (+ Opcodes/ACC_PUBLIC Opcodes/ACC_STATIC)) method nil nil writer)]
