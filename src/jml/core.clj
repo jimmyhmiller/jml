@@ -3,7 +3,8 @@
             [jml.backend :as backend]
             [clojure.walk :as walk]
             [clojure.string :as string]
-            [clojure.reflect :as reflect])
+            [clojure.reflect :as reflect]
+            [clj-java-decompiler.core])
   (:import [org.objectweb.asm Opcodes Type ClassWriter]
            [org.objectweb.asm.commons Method GeneratorAdapter]))
 
@@ -47,13 +48,17 @@
 
 
 (defn resolve-props-type [props]
+
   (if (map? props)
-    (let [{:keys [type owner field-type result-type method]} props]
+
+    (let [{:keys [type owner field-type result-type method local-type]} props]
       (cond-> props
         type  (update :type resolve-type)
+        local-type (update :local-type resolve-type)
         owner (update :owner resolve-type)
         field-type (update :field-type resolve-type)
         method (update :method resolve-method-type)))
+
     props))
 
 
@@ -133,7 +138,6 @@
 
 
 
-
 (defn de-sexpr [expr]
   (walk/postwalk
    (fn [x] (if (reduced? x)
@@ -156,10 +160,13 @@
               (map? x) (reduced x)
               (seq? x) (vec x)
               (and (vector? x) (keyword? (first x))) (reduced x)
+              (and (symbol? x) (string/includes? (full-symbol-name x) "/"))
+              [:get-static-field {:name x}]
               (symbol? x) (keyword x)
               (int? x) (reduced [:int x])
               (boolean? x) (reduced [:bool x])
               (string? x) (reduced [:string x])
+              (nil? x) (reduced [:nil])
               :else x)]
         (if (instance? clojure.lang.IObj result)
           (with-meta result (meta x))
@@ -229,7 +236,12 @@
                      (filter (fn [{:keys [parameter-types]}]
                                (or (nil? method-args)
                                    (= method-args parameter-types)))))
-        _ (assert (= 1 (count methods)) (format "Method overloaded, need to deal with this %s %s" (.getName klass) method-name))
+        _ (when-not (= 1 (count methods))
+            (throw (ex-info "Method overloaded. Need to be more specific"
+                            {:class (.getName klass)
+                             :method-name method-name
+                             :methods methods
+                             :method-args method-args})))
         {:keys [return-type parameter-types]}
         (first methods)]
     {:owner (resolve-type klass)
@@ -245,6 +257,14 @@
                                                        (:name (second instruction)))))
     instruction))
 
+
+(defn infer-static-field [current-instruction]
+  (let [owner (resolve-type (namespace (:name (second current-instruction))))
+        name (get-method-name (:name (second current-instruction)))]
+    (-> current-instruction
+        (assoc-in [1 :owner] owner)
+        (assoc-in [1 :name] name)
+        (assoc-in [1 :field-type] (get-field-type owner name)))))
 
 
 (defn get-owner [sym]
@@ -268,11 +288,14 @@
              code
              (case (first current-instruction)
                :get-field (infer-type-get-field arg-types (last code) current-instruction)
+               :get-static-field (infer-static-field current-instruction)
                :invoke-virtual
-               (assoc current-instruction 1 (get-method-types
-                                             (get-owner (:name (second current-instruction)))
-                                             (get-method-name (:name (second current-instruction)))
-                                             (get-method-arg-types (:name (second current-instruction)))))
+               (do
+                 (println current-instruction)
+                 (assoc current-instruction 1 (get-method-types
+                                               (get-owner (:name (second current-instruction)))
+                                               (get-method-name (:name (second current-instruction)))
+                                               (get-method-arg-types (:name (second current-instruction))))))
                :invoke-static
 
                (assoc current-instruction 1 (get-method-types
@@ -283,10 +306,9 @@
           []
           linearized-code))
 
-(defn log [x]
-  (println (cons 'do x) (type x))
-  (prn x)
-  x)
+(defn log [& args]
+  (apply prn args)
+  (last args))
 
 
 
@@ -329,15 +351,15 @@
               ;; Put types in env
               defn (assoc env (second s-expr) (dispatch-on-type (process-defn s-expr)))
               defenum (do (backend/make-enum (process-enum s-expr)) env)
-              (throw (ex-info "unhandled" {}))))
+              (throw (ex-info "unhandled" {:s-expr s-expr}))))
           {} s-exprs)
   nil)
 
 
-(defmacro lang [& s-exprs]
+(defmacro jml [& s-exprs]
   (run-multiple* s-exprs))
 
-(lang
+(jml
 
  (defenum lang.Code
    PlusInt
@@ -368,7 +390,15 @@
              fieldType asm-type)
    (PutField owner asm-type
              name string
-             fieldType asm-type))
+             fieldType asm-type)
+   (Label stringValue string)
+   (JumpNotEqual stringValue string
+                 compareType asm-type)
+   (JumpEqual stringValue string
+              compareType asm-type)
+   (JumpCmp stringValue string
+            compareType asm-type)
+   (Jump stringValue string))
 
 
  (defn lang.generateCode [org.objectweb.asm.commons.GeneratorAdapter lang.Code void]
@@ -422,16 +452,55 @@
      ;; Hack for returning void
      :else (.GeneratorAdapter/returnValue (arg 0))))
 
- (defn lang.parseThatInt [string int]
-   (Integer/parseInt$java.lang.String (arg 0)))
+
 
 
  (defn lang.myGenerateCode [GeneratorAdapter void]
    (lang.generateCode/invoke (arg 0) (lang.Code/Int 42))
    (lang.generateCode/invoke (arg 0) (lang.Code/Return)))
 
- )
 
+ (defn lang.generateCodeWithEnv [org.objectweb.asm.commons.GeneratorAdapter lang.Code java.util.Map java.util.Map]
+   (cond
+     (.String/equals (.-tagName (arg 1)) "Label")
+     (if (.java.util.Map/containsKey (arg 2) (.-stringValue (arg 1)))
+       (.org.objectweb.asm.commons.GeneratorAdapter/mark$org.objectweb.asm.Label
+        (arg 0)
+        (.java.util.Map/get (arg 2)
+                            (.-stringValue (arg 1))))
+
+       (do
+         (store-local {:local-type org.objectweb.asm.Label
+                       :name "label" }
+                      (.org.objectweb.asm.commons.GeneratorAdapter/newLabel (arg 0)))
+         (.org.objectweb.asm.commons.GeneratorAdapter/ifCmp (arg 0)
+                                                            (.-compareType (arg 1))
+                                                            org.objectweb.asm.commons.GeneratorAdapter/NE
+                                                            (load-local {:name "label"}))
+         (.java.util.Map/put (arg 2) (.-stringValue (arg 1)) (load-local {:name "label"}))
+
+         ;; If branches need balanced stacks
+         ;; Or in other words don't leave garbage on the stack
+
+         (pop)))
+     :else
+     (lang.myGenerateCode/invoke (arg 0)))
+   (arg 2))
+
+ (defn lang.factorial [int int]
+   (if (= (arg 0) 0)
+     1
+     (mult-int (arg 0) (lang.factorial/invoke (sub-int (arg 0) 1)))))
+
+
+
+
+ (defn lang.parseThatInt [string int]
+   (Integer/parseInt$java.lang.String (arg 0)))
+
+
+
+ )
 
 
 

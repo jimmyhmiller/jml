@@ -18,6 +18,8 @@
   (let [code (second command)]
     (case (first command)
 
+      :mult-int  (.math gen GeneratorAdapter/MUL Type/INT_TYPE)
+
       :plus-int
       (recur gen [:math {:op GeneratorAdapter/ADD
                          :op-type Type/INT_TYPE}])
@@ -30,8 +32,13 @@
       (.loadArg ^GeneratorAdapter gen (int (:value code)))
       :math
       (.math gen (:op code) (:op-type code))
+
+      :get-field
+      (.getField gen (:owner code) (:name code) (:field-type code))
+      :put-field
+      (.putField gen (:owner code) (:name code) (:field-type code))
       :get-static-field
-      (.getStatic gen (:owner code) (:name code) (:result-type code))
+      (.getStatic gen (:owner code) (:name code) (:field-type code))
       :invoke-static
       (.invokeStatic gen (:owner code) (:method code))
       :invoke-virtual
@@ -47,10 +54,11 @@
       (.push gen (int (:value code)))
       :string
       (.push gen ^String (:value code))
-      :get-field
-      (.getField gen (:owner code) (:name code) (:field-type code))
-      :put-field
-      (.putField gen (:owner code) (:name code) (:field-type code))
+      :nil
+      (let [^String x nil]
+        ;; best way we found to push null
+        (.push gen x))
+
       :dup
       (.dup gen)
       :pop
@@ -128,18 +136,19 @@
 
 
       :store-local
-      (if-let [local (get env (str "local-" (:index code)))]
+      (if-let [local (get env (str "local-" (:name code)))]
         (do
-          (.storeLocal gen local (:local-type code))
+          (.storeLocal gen (:local-obj local) (:local-type code))
           env)
         (let [local (.newLocal gen (:local-type code))]
           (.storeLocal gen local (:local-type code))
-          (assoc env (str "local-" (:index code)) local)))
+          (assoc env (str "local-" (:name code)) {:local-obj local
+                                                  :local-type (:local-type code)})))
 
       :load-local
-      (if-let [local (get env (str "local-" (:index code)))]
+      (if-let [local (get env (str "local-" (:name code)))]
         (do
-          (.loadLocal gen local (:local-type code))
+          (.loadLocal gen (:local-obj local) (:local-type local))
           env)
         (throw (ex-info "This local was loaded before stored" {:command command :env env})))
 
@@ -162,7 +171,6 @@
 
 
 (defn generate-invoke-method [^ClassWriter writer {:keys [code return-type arg-types]}]
-  (println return-type arg-types)
   (let [method (Method. "invoke" return-type (into-array Type arg-types))
         gen (GeneratorAdapter. (int (+ Opcodes/ACC_PUBLIC Opcodes/ACC_STATIC)) method nil nil writer)]
     (reduce (fn [env line] (generate-code-with-env! gen line env)) {} code)
@@ -264,8 +272,7 @@
           (.invokeVirtual gen sb-type sb-append)
           (.invokeVirtual gen sb-type sb-to-string)
 
-          (.returnValue gen))
-        )
+          (.returnValue gen)))
       (generateDefault []
         (.push gen "Variant not found")
         (.returnValue gen)))))
