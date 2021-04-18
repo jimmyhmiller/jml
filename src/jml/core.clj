@@ -151,6 +151,8 @@
               (reduced [:arg {:value (second x)}])
               (and (seq? x) (symbol? (first x)) (= (first x) 'cond))
               (de-sexpr (expand-cond x))
+              (and (seq? x) (symbol? (first x)) (= (first x) 'do))
+              (vec (interpose '(pop) (rest x)))
               (and (seq? x) (symbol? (first x)) (string/starts-with? (name (first x)) ".-"))
               (vec (concat (rest x) [[:get-field {:name (subs (name (first x)) 2)}]] ))
               (and (seq? x) (symbol? (first x)) (string/starts-with? (full-symbol-name (first x)) "."))
@@ -245,6 +247,7 @@
         {:keys [return-type parameter-types]}
         (first methods)]
     {:owner (resolve-type klass)
+     :return-type return-type
      :method (Method. method-name (resolve-type return-type)
                       (into-array Type (map resolve-type parameter-types)))}))
 
@@ -282,27 +285,30 @@
         (assoc-in [1 :field-type] (get-field-type owner name)))))
 
 
+
 (defn infer-interop-types [arg-types linearized-code]
   (reduce (fn [code current-instruction]
-            (conj
+            (concat
              code
-             (case (first current-instruction)
-               :get-field (infer-type-get-field arg-types (last code) current-instruction)
-               :get-static-field (infer-static-field current-instruction)
-               :invoke-virtual
-               (do
-                 (println current-instruction)
-                 (assoc current-instruction 1 (get-method-types
-                                               (get-owner (:name (second current-instruction)))
-                                               (get-method-name (:name (second current-instruction)))
-                                               (get-method-arg-types (:name (second current-instruction))))))
-               :invoke-static
+             (let [result
+                   (case (first current-instruction)
+                     :get-field (infer-type-get-field arg-types (last code) current-instruction)
+                     :get-static-field (infer-static-field current-instruction)
+                     :invoke-virtual
+                     (assoc current-instruction 1 (get-method-types
+                                                   (get-owner (:name (second current-instruction)))
+                                                   (get-method-name (:name (second current-instruction)))
+                                                   (get-method-arg-types (:name (second current-instruction)))))
+                     :invoke-static
 
-               (assoc current-instruction 1 (get-method-types
-                                             (resolve-type (namespace (:name (second current-instruction))))
-                                             (get-method-name (:name (second current-instruction)))
-                                             (get-method-arg-types  (:name (second current-instruction)))))
-               current-instruction)))
+                     (assoc current-instruction 1 (get-method-types
+                                                   (resolve-type (namespace (:name (second current-instruction))))
+                                                   (get-method-name (:name (second current-instruction)))
+                                                   (get-method-arg-types  (:name (second current-instruction)))))
+                     current-instruction)]
+               (if (= (:return-type (second result)) 'void)
+                 [result [:nil]]
+                 [result]))))
           []
           linearized-code))
 
@@ -454,12 +460,6 @@
 
 
 
-
- (defn lang.myGenerateCode [GeneratorAdapter void]
-   (lang.generateCode/invoke (arg 0) (lang.Code/Int 42))
-   (lang.generateCode/invoke (arg 0) (lang.Code/Return)))
-
-
  (defn lang.generateCodeWithEnv [org.objectweb.asm.commons.GeneratorAdapter lang.Code java.util.Map java.util.Map]
    (cond
      (.String/equals (.-tagName (arg 1)) "Label")
@@ -473,35 +473,47 @@
          (store-local {:local-type org.objectweb.asm.Label
                        :name "label" }
                       (.org.objectweb.asm.commons.GeneratorAdapter/newLabel (arg 0)))
-         (.org.objectweb.asm.commons.GeneratorAdapter/ifCmp (arg 0)
-                                                            (.-compareType (arg 1))
-                                                            org.objectweb.asm.commons.GeneratorAdapter/NE
-                                                            (load-local {:name "label"}))
-         (.java.util.Map/put (arg 2) (.-stringValue (arg 1)) (load-local {:name "label"}))
+         (.org.objectweb.asm.commons.GeneratorAdapter/mark$org.objectweb.asm.Label
+          (arg 0)
+          (.java.util.Map/get (arg 2)
+                              (.-stringValue (arg 1))))
+         (.java.util.Map/put (arg 2) (.-stringValue (arg 1)) (load-local {:name "label"}))))
 
-         ;; If branches need balanced stacks
-         ;; Or in other words don't leave garbage on the stack
+     (.String/equals (.-tagName (arg 1)) "Jump")
+     (if (.java.util.Map/containsKey (arg 2) (.-stringValue (arg 1)))
+       (.org.objectweb.asm.commons.GeneratorAdapter/goTo
+        (arg 0)
+        (.java.util.Map/get (arg 2)
+                            (.-stringValue (arg 1))))
 
-         (pop)))
+       (do
+         (store-local {:local-type org.objectweb.asm.Label
+                       :name "label" }
+                      (.org.objectweb.asm.commons.GeneratorAdapter/newLabel (arg 0)))
+         (.org.objectweb.asm.commons.GeneratorAdapter/goTo (arg 0)
+                                                           (load-local {:name "label"}))
+         (.java.util.Map/put (arg 2) (.-stringValue (arg 1)) (load-local {:name "label"}))))
      :else
      (lang.myGenerateCode/invoke (arg 0)))
    (arg 2))
 
  ;; this doesn't actually work because the type isn't resolved yet :(
  #_(defn lang.factorial [int int]
-   (if (= (arg 0) 0)
-     1
-     (mult-int (arg 0) (lang.factorial/invoke (sub-int (arg 0) 1)))))
-
-
+     (if (= (arg 0) 0)
+       1
+       (mult-int (arg 0) (lang.factorial/invoke (sub-int (arg 0) 1)))))
 
 
  (defn lang.parseThatInt [string int]
    (Integer/parseInt$java.lang.String (arg 0)))
 
 
+ (defn lang.myGenerateCode [GeneratorAdapter void]
+   (lang.generateCode/invoke (arg 0) (lang.Code/Int 42))
+   (lang.generateCode/invoke (arg 0) (lang.Code/Return)))
 
  )
+
 
 
 

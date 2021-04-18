@@ -139,9 +139,11 @@
       (if-let [local (get env (str "local-" (:name code)))]
         (do
           (.storeLocal gen (:local-obj local) (:local-type code))
+          (generate-code! gen [:nil])
           env)
         (let [local (.newLocal gen (:local-type code))]
           (.storeLocal gen local (:local-type code))
+          (generate-code! gen [:nil])
           (assoc env (str "local-" (:name code)) {:local-obj local
                                                   :local-type (:local-type code)})))
 
