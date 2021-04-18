@@ -258,14 +258,6 @@
     instruction))
 
 
-(defn infer-static-field [current-instruction]
-  (let [owner (resolve-type (namespace (:name (second current-instruction))))
-        name (get-method-name (:name (second current-instruction)))]
-    (-> current-instruction
-        (assoc-in [1 :owner] owner)
-        (assoc-in [1 :name] name)
-        (assoc-in [1 :field-type] (get-field-type owner name)))))
-
 
 (defn get-owner [sym]
   (resolve-type (subs (namespace sym) 1)))
@@ -280,6 +272,14 @@
     nil))
 
 
+
+(defn infer-static-field [current-instruction]
+  (let [owner (resolve-type (namespace (:name (second current-instruction))))
+        name (get-method-name (:name (second current-instruction)))]
+    (-> current-instruction
+        (assoc-in [1 :owner] owner)
+        (assoc-in [1 :name] name)
+        (assoc-in [1 :field-type] (get-field-type owner name)))))
 
 
 (defn infer-interop-types [arg-types linearized-code]
@@ -487,7 +487,8 @@
      (lang.myGenerateCode/invoke (arg 0)))
    (arg 2))
 
- (defn lang.factorial [int int]
+ ;; this doesn't actually work because the type isn't resolved yet :(
+ #_(defn lang.factorial [int int]
    (if (= (arg 0) 0)
      1
      (mult-int (arg 0) (lang.factorial/invoke (sub-int (arg 0) 1)))))
