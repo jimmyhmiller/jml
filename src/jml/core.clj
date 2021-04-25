@@ -460,6 +460,11 @@
 
 
 
+
+ (defn lang.myGenerateCode [GeneratorAdapter void]
+   (lang.generateCode/invoke (arg 0) (lang.Code/Int 42))
+   (lang.generateCode/invoke (arg 0) (lang.Code/Return)))
+
  (defn lang.generateCodeWithEnv [org.objectweb.asm.commons.GeneratorAdapter lang.Code java.util.Map java.util.Map]
    (cond
      (.String/equals (.-tagName (arg 1)) "Label")
@@ -497,6 +502,9 @@
      (lang.myGenerateCode/invoke (arg 0)))
    (arg 2))
 
+ (defn lang.parseThatInt [string int]
+   (Integer/parseInt$java.lang.String (arg 0)))
+
  ;; this doesn't actually work because the type isn't resolved yet :(
  #_(defn lang.factorial [int int]
      (if (= (arg 0) 0)
@@ -504,17 +512,9 @@
        (mult-int (arg 0) (lang.factorial/invoke (sub-int (arg 0) 1)))))
 
 
- (defn lang.parseThatInt [string int]
-   (Integer/parseInt$java.lang.String (arg 0)))
 
-
- (defn lang.myGenerateCode [GeneratorAdapter void]
-   (lang.generateCode/invoke (arg 0) (lang.Code/Int 42))
-   (lang.generateCode/invoke (arg 0) (lang.Code/Return)))
 
  )
-
-
 
 
 (lang.parseThatInt/invoke "42")

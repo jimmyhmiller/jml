@@ -55,10 +55,7 @@
       :string
       (.push gen ^String (:value code))
       :nil
-      (let [^String x nil]
-        ;; best way we found to push null
-        (.push gen x))
-
+      (.visitInsn gen org.objectweb.asm.Opcodes/ACONST_NULL)
       :dup
       (.dup gen)
       :pop
