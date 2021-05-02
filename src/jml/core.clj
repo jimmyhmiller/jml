@@ -207,9 +207,6 @@
     expr)))
 
 
-
-
-
 (defn linearize* [code]
   (let [[op props & children] code
         children (if (vector? props)
@@ -367,6 +364,41 @@
                         linearize
                         (infer-interop-types arg-types))
                    [[:return]])}))
+
+
+
+(defn process-defn-for-types [[_ fn-name types & body]]
+  (let [arg-names (map first (partition 2 (butlast types)))
+        arg-types (map second (partition 2 (butlast types)))]
+    {:type :fn
+     :arg-types arg-types
+     :return-type (last types)
+     :code (de-sexpr body)}))
+
+
+(process-defn-for-types
+ '(defn lang.generateCodeWithEnv [gen org.objectweb.asm.commons.GeneratorAdapter code lang.Code env java.util.Map java.util.Map]
+    (cond
+      (.equals (.-tagName code) "Label")
+      (if (.containsKey env (.-stringValue code))
+        (.mark gen (.get env (.-stringValue code)))
+        (do
+          (store-local {:local-type org.objectweb.asm.Label :name "label" }
+                       (.newLabel gen))
+          (.mark gen (.get env (.-stringValue code)))
+          (.put env (.-stringValue code) (load-local {:name "label"}))))
+
+      (.equals (.-tagName code) "Jump")
+      (if (.containsKey env (.-stringValue code))
+        (.goTo code (.get env (.-stringValue code)))
+
+        (let [label (.newLabel gen) org.objectweb.asm.Label]
+          (.goTo gen label)
+          (.put env (.-stringValue code) label)))
+      :else
+      (lang.myGenerateCode/invoke gen))
+    env))
+
 
 (defn process-enum [[_ enum-name & variants]]
   {:class-name (string/replace (str enum-name) "." "/")
