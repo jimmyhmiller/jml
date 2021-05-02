@@ -9,9 +9,12 @@
            [org.objectweb.asm.commons Method GeneratorAdapter]))
 
 
+
+
 (defn resolve-type [expr-type]
   (let [t (type expr-type)]
-    (cond   ;;if expr is already of asm.Type
+    (cond
+      ;; if expr is already of asm.Type
       (= t Type)
       expr-type
 
@@ -138,6 +141,34 @@
 
 
 
+
+(defn replace-sexprs [sexpr replacement-map]
+  (walk/postwalk-replace replacement-map sexpr))
+
+
+(defn desugar-let [[_ bindings & body]]
+  (when-not (zero? (mod (count bindings) 3))
+    (throw (ex-info "Invalid bindings, did you forget a type?" {:bindings bindings :body body})))
+  (let [bindings (map vec (partition 3 bindings))
+        bindings-map (into {} (map (fn [[k _ _]]
+                                     [k (list 'load-local {:name (name k)})])
+                                   bindings))
+        locals (map (fn [[k v t]]
+                      (list 'store-local {:name (name k) :local-type t} v)) bindings)
+        body (replace-sexprs body bindings-map)]
+
+    (concat '(do) locals body)))
+
+
+(defn replace-let-exprs [expr]
+  (walk/postwalk
+   (fn [x]
+     (if (and (seq? x) (symbol? (first x)) (=  (first x) 'let))
+       (desugar-let x)
+       x))
+   expr))
+
+
 (defn de-sexpr [expr]
   (walk/postwalk
    (fn [x] (if (reduced? x)
@@ -154,11 +185,11 @@
               (and (seq? x) (symbol? (first x)) (= (first x) 'do))
               (vec (interpose '(pop) (rest x)))
               (and (seq? x) (symbol? (first x)) (string/starts-with? (name (first x)) ".-"))
-              (vec (concat (rest x) [[:get-field {:name (subs (name (first x)) 2)}]] ))
+              (into [:get-field {:name (subs (name (first x)) 2)}] (rest x)) 
               (and (seq? x) (symbol? (first x)) (string/starts-with? (full-symbol-name (first x)) "."))
-              (vec (concat (rest x) [[:invoke-virtual {:name (first x)}]] ))
+              (into [:invoke-virtual {:name (first x)}] (rest x))
               (and (seq? x) (symbol? (first x)) (string/includes? (full-symbol-name (first x)) "/"))
-              (vec (concat (rest x) [[:invoke-static {:name (first x)}]] ))
+              (into [:invoke-static {:name (first x)}] (rest x))
               (map? x) (reduced x)
               (seq? x) (vec x)
               (and (vector? x) (keyword? (first x))) (reduced x)
@@ -174,6 +205,8 @@
           (with-meta result (meta x))
           result)))
     expr)))
+
+
 
 
 
@@ -318,15 +351,21 @@
 
 
 
+(defn replace-args [sexpr arg-names]
+  (replace-sexprs sexpr (into {} (map vector arg-names (map (fn [i] (list 'arg i)) (range))))))
+
 
 (defn process-defn [[_ fn-name types & body]]
-  (let [arg-types (mapv resolve-type (butlast types))]
+  (let [arg-names (map first (partition 2 (butlast types)))
+        arg-types (mapv resolve-type (map second (partition 2 (butlast types))))]
     {:type :fn
      :class-name (string/replace (name fn-name) "." "/")
      :arg-types arg-types
      :return-type (resolve-type (last types))
-     :code (concat (infer-interop-types arg-types
-                                        (linearize (cons 'do  body)))
+     :code (concat (->> (replace-args (replace-let-exprs body) arg-names)
+                        (cons 'do)
+                        linearize
+                        (infer-interop-types arg-types))
                    [[:return]])}))
 
 (defn process-enum [[_ enum-name & variants]]
@@ -343,19 +382,13 @@
          variants)})
 
 
-
-(defn dispatch-on-type [{:keys [type] :as entity}]
-  (case type
-    :fn (backend/make-fn entity)
-    (throw (ex-info "not handled" {}))))
-
-
 (defn run-multiple* [s-exprs]
   ;; Making an env to look functions up later.
   (reduce (fn [env s-expr]
             (case (first s-expr)
               ;; Put types in env
-              defn (assoc env (second s-expr) (dispatch-on-type (process-defn s-expr)))
+              defn (assoc env (second s-expr)
+                          (backend/make-fn (process-defn s-expr)))
               defenum (do (backend/make-enum (process-enum s-expr)) env)
               (throw (ex-info "unhandled" {:s-expr s-expr}))))
           {} s-exprs)
@@ -406,115 +439,109 @@
             compareType asm-type)
    (Jump stringValue string))
 
-
- (defn lang.generateCode [org.objectweb.asm.commons.GeneratorAdapter lang.Code void]
+ (defn lang.generateCode [gen org.objectweb.asm.commons.GeneratorAdapter code lang.Code void]
 
    (cond
-     (.String/equals (.-tagName (arg 1)) "Arg")
-     (.GeneratorAdapter/loadArg (arg 0)  (.-argIndex (arg 1)))
+     (.String/equals (.-tagName code) "Arg")
+     (.GeneratorAdapter/loadArg gen  (.-argIndex code))
 
-     (.String/equals (.-tagName (arg 1)) "Math")
-     (.GeneratorAdapter/math (arg 0) (.-op (arg 1)) (.-opType (arg 1)))
+     (.String/equals (.-tagName code) "Math")
+     (.GeneratorAdapter/math gen (.-op code) (.-opType code))
 
-     (.String/equals (.-tagName (arg 1)) "GetStaticField")
-     (.GeneratorAdapter/getStatic (arg 0) (.-owner (arg 1)) (.-name (arg 1)) (.-resultType (arg 1)))
+     (.String/equals (.-tagName code) "GetStaticField")
+     (.GeneratorAdapter/getStatic gen (.-owner code) (.-name code) (.-resultType code))
 
-     (.String/equals (.-tagName (arg 1)) "InvokeStatic")
-     (.GeneratorAdapter/invokeStatic (arg 0) (.-owner (arg 1)) (.-method (arg 1)))
+     (.String/equals (.-tagName code) "InvokeStatic")
+     (.GeneratorAdapter/invokeStatic gen (.-owner code) (.-method code))
 
-     (.String/equals (.-tagName (arg 1)) "InvokeVirtual")
-     (.GeneratorAdapter/invokeVirtual (arg 0) (.-owner (arg 1)) (.-method (arg 1)))
+     (.String/equals (.-tagName code) "InvokeVirtual")
+     (.GeneratorAdapter/invokeVirtual gen (.-owner code) (.-method code))
 
-     (.String/equals (.-tagName (arg 1)) "InvokeConstructor")
-     (.GeneratorAdapter/invokeConstructor (arg 0) (.-owner (arg 1)) (.-method (arg 1)))
+     (.String/equals (.-tagName code) "InvokeConstructor")
+     (.GeneratorAdapter/invokeConstructor gen (.-owner code) (.-method code))
 
-     (.String/equals (.-tagName (arg 1)) "New")
-     (.GeneratorAdapter/newInstance (arg 0) (.-owner (arg 1)))
+     (.String/equals (.-tagName code) "New")
+     (.GeneratorAdapter/newInstance gen (.-owner code))
 
-     (.String/equals (.-tagName (arg 1)) "Bool")
-     (.GeneratorAdapter/push$boolean (arg 0) (.-boolValue (arg 1)))
+     (.String/equals (.-tagName code) "Bool")
+     (.GeneratorAdapter/push$boolean gen (.-boolValue code))
 
-     (.String/equals (.-tagName (arg 1)) "Int")
-     (.GeneratorAdapter/push$int (arg 0) (.-intValue (arg 1)))
+     (.String/equals (.-tagName code) "Int")
+     (.GeneratorAdapter/push$int gen (.-intValue code))
 
-     (.String/equals (.-tagName (arg 1)) "String")
-     (.GeneratorAdapter/push$java.lang.String (arg 0) ^String (.-stringValue (arg 1)))
+     (.String/equals (.-tagName code) "String")
+     (.GeneratorAdapter/push$java.lang.String gen ^String (.-stringValue code))
 
-     (.String/equals (.-tagName (arg 1)) "GetField")
-     (.GeneratorAdapter/getField (arg 0) (.-owner (arg 1)) (.-name (arg 1)) (.-fieldType (arg 1)))
+     (.String/equals (.-tagName code) "GetField")
+     (.GeneratorAdapter/getField gen (.-owner code) (.-name code) (.-fieldType code))
 
-     (.String/equals (.-tagName (arg 1)) "PutField")
-     (.GeneratorAdapter/putField (arg 0) (.-owner (arg 1)) (.-name (arg 1)) (.-fieldType (arg 1)))
+     (.String/equals (.-tagName code) "PutField")
+     (.GeneratorAdapter/putField gen (.-owner code) (.-name code) (.-fieldType code))
 
-     (.String/equals (.-tagName (arg 1)) "Dup")
-     (.GeneratorAdapter/dup (arg 0))
+     (.String/equals (.-tagName code) "Dup")
+     (.GeneratorAdapter/dup gen)
 
-     (.String/equals (.-tagName (arg 1)) "Pop")
-     (.GeneratorAdapter/pop (arg 0))
+     (.String/equals (.-tagName code) "Pop")
+     (.GeneratorAdapter/pop gen)
 
-     (.String/equals (.-tagName (arg 1)) "Return")
-     (.GeneratorAdapter/returnValue (arg 0))
+     (.String/equals (.-tagName code) "Return")
+     (.GeneratorAdapter/returnValue gen)
 
      ;; Hack for returning void
-     :else (.GeneratorAdapter/returnValue (arg 0))))
+     ;; We should probably just not add return if the type is void?
+     :else (.GeneratorAdapter/returnValue gen)))
 
 
+ (defn lang.myGenerateCode [gen GeneratorAdapter void]
+   (lang.generateCode/invoke gen (lang.Code/Int 42))
+   (lang.generateCode/invoke gen (lang.Code/Return)))
 
-
- (defn lang.myGenerateCode [GeneratorAdapter void]
-   (lang.generateCode/invoke (arg 0) (lang.Code/Int 42))
-   (lang.generateCode/invoke (arg 0) (lang.Code/Return)))
-
- (defn lang.generateCodeWithEnv [org.objectweb.asm.commons.GeneratorAdapter lang.Code java.util.Map java.util.Map]
+ (defn lang.generateCodeWithEnv [gen org.objectweb.asm.commons.GeneratorAdapter code lang.Code env java.util.Map java.util.Map]
    (cond
-     (.String/equals (.-tagName (arg 1)) "Label")
-     (if (.java.util.Map/containsKey (arg 2) (.-stringValue (arg 1)))
+     (.String/equals (.-tagName code) "Label")
+     (if (.java.util.Map/containsKey env (.-stringValue code))
        (.org.objectweb.asm.commons.GeneratorAdapter/mark$org.objectweb.asm.Label
-        (arg 0)
-        (.java.util.Map/get (arg 2)
-                            (.-stringValue (arg 1))))
+        gen
+        (.java.util.Map/get env (.-stringValue code)))
 
        (do
          (store-local {:local-type org.objectweb.asm.Label
                        :name "label" }
-                      (.org.objectweb.asm.commons.GeneratorAdapter/newLabel (arg 0)))
+                      (.org.objectweb.asm.commons.GeneratorAdapter/newLabel gen))
          (.org.objectweb.asm.commons.GeneratorAdapter/mark$org.objectweb.asm.Label
-          (arg 0)
-          (.java.util.Map/get (arg 2)
-                              (.-stringValue (arg 1))))
-         (.java.util.Map/put (arg 2) (.-stringValue (arg 1)) (load-local {:name "label"}))))
+          gen
+          (.java.util.Map/get env (.-stringValue code)))
+         (.java.util.Map/put env (.-stringValue code) (load-local {:name "label"}))))
 
-     (.String/equals (.-tagName (arg 1)) "Jump")
-     (if (.java.util.Map/containsKey (arg 2) (.-stringValue (arg 1)))
+     (.String/equals (.-tagName code) "Jump")
+     (if (.java.util.Map/containsKey env (.-stringValue code))
        (.org.objectweb.asm.commons.GeneratorAdapter/goTo
-        (arg 0)
-        (.java.util.Map/get (arg 2)
-                            (.-stringValue (arg 1))))
+        code
+        (.java.util.Map/get env (.-stringValue code)))
 
-       (do
-         (store-local {:local-type org.objectweb.asm.Label
-                       :name "label" }
-                      (.org.objectweb.asm.commons.GeneratorAdapter/newLabel (arg 0)))
-         (.org.objectweb.asm.commons.GeneratorAdapter/goTo (arg 0)
-                                                           (load-local {:name "label"}))
-         (.java.util.Map/put (arg 2) (.-stringValue (arg 1)) (load-local {:name "label"}))))
+       (let [label (.org.objectweb.asm.commons.GeneratorAdapter/newLabel gen) org.objectweb.asm.Label]
+         (.org.objectweb.asm.commons.GeneratorAdapter/goTo gen label)
+         (.java.util.Map/put env (.-stringValue code) label)))
      :else
-     (lang.myGenerateCode/invoke (arg 0)))
-   (arg 2))
+     (lang.myGenerateCode/invoke gen))
+   env)
 
- (defn lang.parseThatInt [string int]
-   (Integer/parseInt$java.lang.String (arg 0)))
+ (defn lang.parseThatInt [s string int]
+   (Integer/parseInt$java.lang.String s))
 
  ;; this doesn't actually work because the type isn't resolved yet :(
- #_(defn lang.factorial [int int]
-     (if (= (arg 0) 0)
-       1
-       (mult-int (arg 0) (lang.factorial/invoke (sub-int (arg 0) 1)))))
-
-
-
+ #_(defn lang.factorial [n int int]
+   (if (= n 0)
+     1
+     (mult-int n (lang.factorial/invoke (sub-int n 1)))))
 
  )
+
+
+
+
+
+
 
 
 (lang.parseThatInt/invoke "42")
@@ -527,3 +554,7 @@
    #(lang.myGenerateCode/invoke %))
 
   (lang2.MyAwesomeCode/invoke))
+
+
+
+

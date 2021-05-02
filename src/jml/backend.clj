@@ -73,7 +73,6 @@
                                                  (.getGenericType (.getDeclaredField (Class/forName "java.lang.System")
                                                                                      "out")))
                                (Method. "println" Type/VOID_TYPE  (into-array Type [Type/INT_TYPE]))))
-      ;; We need some environment or two phases for labels
       :return
       (.returnValue gen))))
 
