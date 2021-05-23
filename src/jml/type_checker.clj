@@ -16,29 +16,39 @@
                                   :env env}))))
 
 (defn symbol->type [sym]
-  (Type/getType ^Class (Class/forName (name sym))))
+  (case sym
+    void Type/VOID_TYPE
+    int Type/INT_TYPE
+    long Type/LONG_TYPE
+    boolean Type/BOOLEAN_TYPE
+    (Type/getType ^Class (Class/forName (name sym)))))
 
 (defn to-type-array [syms]
   (into-array Type (map symbol->type syms)))
 
 
+
 (defn jvm-type-equiv? [[target actual]]
-  ;; We need to handle a subtyping relation
+  ;; Checking primatives and subclassing relation
   (or (= target actual)
-      (= target 'java.lang.Object)))
+      ;; Ugly hack to autocase
+      (= actual 'java.lang.Object)
+      (.isAssignableFrom (Class/forName (name target)) (Class/forName (name actual)))))
 
 (defn create-method [{:keys [name arg-types return-type]}]
   (Method. name (symbol->type return-type) (to-type-array arg-types)))
 
-(defn get-method-info [klass method-name method-args]
+(defn get-method-info-jvm [klass method-name method-args]
   (let [methods (->> (reflect/reflect klass)
                      :members
                      (filter (comp #{(symbol method-name)} :name))
                      (filter (fn [{:keys [parameter-types]}]
+                               (= (count parameter-types) (count method-args))))
+                     (filter (fn [{:keys [parameter-types]}]
                                (or (nil? method-args)
                                    (every? jvm-type-equiv? (map vector parameter-types method-args))))))
         _ (when-not (= 1 (count methods))
-            (throw (ex-info "Method overloaded. Need to be more specific"
+            (throw (ex-info "Method overloaded. Need to be more or less specific"
                             {:class (.getName klass)
                              :method-name method-name
                              :methods methods
@@ -53,7 +63,9 @@
 
 
 (defn get-field-type [owner field env]
-  (get-in env [:data-types owner field]))
+  (if-let [val (get-in env [:data-types owner field])]
+    val
+    (throw (ex-info "Field not found" {:owner owner :field field :env env}))))
 
 
 (defn check [{:keys [expr type env] :as context}]
@@ -61,7 +73,8 @@
     :int (matches-type 'int context)
     :bool (matches-type 'bool context)
     :string (matches-type 'java.lang.String context)
-    :arg (matches-type (get-in env [:arg-types (:value (second expr))]) context)))
+    :arg (matches-type (get-in env [:arg-types (:value (second expr))]) context)
+    (throw (ex-info "No matching check" {:expr expr :type type :env env}))))
 
 
 
@@ -71,7 +84,42 @@
     :bool 'boolean
     :string 'java.lang.String
     :arg (get-in env [:arg-types (:value (second expr))])
-    :get-field (get-field-type (:owner (second expr)) (:name (second expr)) env)))
+    :get-field (get-field-type (:owner (second expr)) (:name (second expr)) env)
+    :invoke-virtual (if-let [return-type (:return-type (second expr))]
+                      return-type
+                      (throw (ex-info "Can't snyth invoke virtual" {:expr expr :env env})))
+    ;; Fix by looking in env
+    :load-local 'java.lang.Object
+    (throw (ex-info "No matching synth" {:expr expr :env env}))))
+
+
+
+(declare augment)
+
+(defn get-method-info [{:keys [env] :as context} owner-name method-name args ]
+
+  (if-let [{:keys [return-type arg-types]} (get-in env [:functions owner-name])]
+    {:method (create-method {:name method-name
+                             :arg-types arg-types
+                             :return-type return-type})
+     :return-type return-type}
+    ;; TODO: get-method-info-jvm
+
+    (let [augmented-args (mapv #(augment (assoc context :expr %)) args)
+          arg-types (mapv #(synth (assoc context :expr %)) augmented-args)]
+      (try
+        (get-method-info-jvm (Class/forName (name owner-name))
+                             method-name
+                             arg-types)
+        (catch Exception e
+          (throw (ex-info "Can't find method info" {:context context
+                                                    :owner-name owner-name
+                                                    :method-name method-name
+                                                    :args args
+                                                    :arg-types arg-types}
+                          e)))))))
+
+
 
 
 
@@ -88,35 +136,93 @@
                        (assoc-in [1 :field-type] field-type))))
     :invoke-virtual (let [[tag attrs & [this & args]] expr]
                       (let [method-name (subs (name (:name attrs)) 1)
-                            this-type (synth (assoc context :expr this))
-                            augmented-args (mapv #(augment  (assoc context :expr %)) args)
+                            this-type (synth (assoc context :expr (augment (assoc context :expr this))))
+                            ;; Duplicated in get-method-info
+                            augmented-args (mapv #(augment (assoc context :expr %)) args)
                             arg-types (mapv #(synth (assoc context :expr %)) augmented-args)
-                            {:keys [method return-type]} (get-method-info (Class/forName (name this-type))
+                            {:keys [method return-type]} (get-method-info context
+                                                                          this-type
                                                                           method-name
-                                                                          arg-types)]
+                                                                          args)]
                         (into [tag
                                (-> attrs
                                    (assoc :owner this-type)
                                    ;; Should we do parameters from reflect?
                                    ;; Not sure
+                                   ;; Could be object instead of string for example
                                    (assoc :arg-types arg-types)
                                    (assoc :return-type return-type)
                                    (assoc :name method-name)
                                    (assoc :method method))]
                               augmented-args)))
-    expr))
+    :invoke-static (let [[tag attrs & [& args]] expr]
+                     (let [this (symbol (namespace (:name attrs)))
+                           method-name (name (:name attrs))
+                           this-type this
+                           augmented-args (mapv #(augment (assoc context :expr %)) args)
+                           arg-types (mapv #(synth (assoc context :expr %)) augmented-args)
+                           {:keys [method return-type]} (get-method-info context
+                                                                         this
+                                                                         method-name
+                                                                         args)]
+                       (into [tag
+                              (-> attrs
+                                  (assoc :owner this-type)
+                                  ;; Should we do parameters from reflect?
+                                  ;; Not sure
+                                  ;; Could be object instead of string for example
+                                  (assoc :arg-types arg-types)
+                                  (assoc :return-type return-type)
+                                  (assoc :name method-name)
+                                  (assoc :method method))]
+                             augmented-args)))
+    :do (into [(first expr)]
+              ;; Need to reduce?
+              (mapv (fn [expr] (augment (assoc context :expr expr))) (rest expr)))
+    :if  (into [(first expr)]
+               (mapv (fn [expr] (augment (assoc context :expr expr)))
+                     (rest expr)))
+    :pop [:pop]
+    (into [(first expr) (second expr)]
+          (mapv (fn [expr] (augment (assoc context :expr expr)))
+                (rest (rest expr))))))
 
+
+
+(augment {:expr '[:invoke-static
+                  {:name lang.myGenerateCode/invoke}
+                  [:arg {:value 0}]]
+          :env '{:arg-types [org.objectweb.asm.commons.GeneratorAdapter lang.Code java.util.Map]
+                 :data-types {lang.Code {"stringValue" java.lang.String}}
+                 :functions {lang.myGenerateCode {:arg-types [org.objectweb.asm.commons.GeneratorAdapter]
+                                                  :return-type void}}}})
+
+
+;; TODO
+;; Run this code!
+(augment {:expr (:code example)
+          :env '{:arg-types [org.objectweb.asm.commons.GeneratorAdapter lang.Code java.util.Map]
+                 :data-types {lang.Code {"stringValue" java.lang.String
+                                         "tagName" java.lang.String}}
+                 :functions {lang.myGenerateCode {:arg-types [org.objectweb.asm.commons.GeneratorAdapter]
+                                                  :return-type void}}}})
 
 
 (synth {:expr [:int 2]})
 
+;; Error
 (check {:expr [:int 2] :type 'java.lang.String})
 
+;; Error
 (check {:expr [:arg {:value 0}] :type 'java.lang.String :env {:arg-types ['int]}})
+
+
 (check {:expr [:arg {:value 0}] :type 'java.lang.String :env {:arg-types '[java.lang.String]}})
 (synth {:expr [:arg {:value 0}] :env {:arg-types ['java.lang.String]}})
 
+;; Error
 (augment {:expr [:int 2] :type 'java.lang.String})
+
 (augment {:expr [:int 2] :type 'int})
 
 
@@ -130,10 +236,18 @@
 
 
 
+
 (augment {:expr '[:invoke-virtual
                   {:name .get}
                   [:arg {:value 2}]
                   [:get-field {:name "stringValue"} [:arg {:value 1}]]]
+          :env '{:arg-types [org.objectweb.asm.commons.GeneratorAdapter lang.Code java.util.Map]
+                 :data-types {lang.Code {"stringValue" java.lang.String}}}})
+
+
+(augment {:expr '[:store-local
+                  {:local-type org.objectweb.asm.Label, :name "label"}
+                  [:invoke-virtual {:name .newLabel} [:arg {:value 0}]]]
           :env '{:arg-types [org.objectweb.asm.commons.GeneratorAdapter lang.Code java.util.Map]
                  :data-types {lang.Code {"stringValue" java.lang.String}}}})
 
@@ -152,7 +266,8 @@
      java.util.Map),
     :return-type java.util.Map,
     :code
-    [[:if
+    [:do
+     [:if
       [:invoke-virtual
        {:name .equals}
        [:get-field {:name "tagName"} [:arg {:value 1}]]
@@ -169,7 +284,8 @@
          {:name .get}
          [:arg {:value 2}]
          [:get-field {:name "stringValue"} [:arg {:value 1}]]]]
-       [[:store-local
+       [:do
+        [:store-local
          {:local-type org.objectweb.asm.Label, :name "label"}
          [:invoke-virtual {:name .newLabel} [:arg {:value 0}]]]
         [:pop]
@@ -198,12 +314,13 @@
          [:get-field {:name "stringValue"} [:arg {:value 1}]]]
         [:invoke-virtual
          {:name .goTo}
-         [:arg {:value 1}]
+         [:arg {:value 0}]
          [:invoke-virtual
           {:name .get}
           [:arg {:value 2}]
           [:get-field {:name "stringValue"} [:arg {:value 1}]]]]
-        [[:store-local
+        [:do
+         [:store-local
           {:name "label", :local-type org.objectweb.asm.Label}
           [:invoke-virtual {:name .newLabel} [:arg {:value 0}]]]
          [:pop]

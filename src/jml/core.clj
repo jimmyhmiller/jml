@@ -536,14 +536,11 @@
         gen
         (.java.util.Map/get env (.-stringValue code)))
 
-       (do
-         (store-local {:local-type org.objectweb.asm.Label
-                       :name "label" }
-                      (.org.objectweb.asm.commons.GeneratorAdapter/newLabel gen))
+       (let [label (.org.objectweb.asm.commons.GeneratorAdapter/newLabel gen) org.objectweb.asm.Label]
          (.org.objectweb.asm.commons.GeneratorAdapter/mark$org.objectweb.asm.Label
           gen
           (.java.util.Map/get env (.-stringValue code)))
-         (.java.util.Map/put env (.-stringValue code) (load-local {:name "label"}))))
+         (.java.util.Map/put env (.-stringValue code) label)))
 
      (.String/equals (.-tagName code) "Jump")
      (if (.java.util.Map/containsKey env (.-stringValue code))
