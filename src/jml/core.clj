@@ -4,13 +4,14 @@
             [clojure.walk :as walk]
             [clojure.string :as string]
             [clojure.reflect :as reflect]
-            [clj-java-decompiler.core])
+            [clj-java-decompiler.core]
+            [jml.type-checker :as type-checker])
   (:import [org.objectweb.asm Opcodes Type ClassWriter]
            [org.objectweb.asm.commons Method GeneratorAdapter]))
 
 
 
-
+;; TODO: get rid of this
 (defn resolve-type [expr-type]
   (let [t (type expr-type)]
     (cond
@@ -27,7 +28,9 @@
         boolean Type/BOOLEAN_TYPE
         bool Type/BOOLEAN_TYPE
         string (Type/getType String)
-        (let [resolved (resolve (symbol expr-type))]
+        (Type/getType (str "L"  (string/replace expr-type "." "/") ";"))
+        #_(let [_ (println expr-type)
+              resolved (resolve (symbol expr-type))]
           (if resolved
             (Type/getType ^Class resolved)
             (throw (ex-info "Cannot resolve type  from symbol" {:type expr-type})))))
@@ -38,18 +41,8 @@
       :else
       (throw (ex-info (format  "[resolve-type] Unknown type %s" expr-type) {:expr expr-type})))))
 
-(defn java-array? [obj]
-  (.isArray (class obj)))
 
-(defn resolve-method-type [expr]
-  (if (= (type expr) org.objectweb.asm.commons.Method)
-    expr
-    (let [[_ method-name return-type arg-types] expr
-          arg-types (if (java-array? arg-types) arg-types
-                        (into-array Type (map resolve-type arg-types)))]
-      (Method. method-name (resolve-type return-type) arg-types))))
-
-
+;; TODO: get rid of this
 (defn resolve-props-type [props]
 
   (if (map? props)
@@ -59,11 +52,9 @@
         type  (update :type resolve-type)
         local-type (update :local-type resolve-type)
         owner (update :owner resolve-type)
-        field-type (update :field-type resolve-type)
-        method (update :method resolve-method-type)))
+        field-type (update :field-type resolve-type)))
 
     props))
-
 
 
 (defn cmp-op-type [op]
@@ -140,8 +131,6 @@
 
 
 
-
-
 (defn replace-sexprs [sexpr replacement-map]
   (walk/postwalk-replace replacement-map sexpr))
 
@@ -168,7 +157,6 @@
        x))
    expr))
 
-
 (defn de-sexpr [expr]
   (walk/postwalk
    (fn [x] (if (reduced? x)
@@ -183,7 +171,7 @@
               (and (seq? x) (symbol? (first x)) (= (first x) 'cond))
               (de-sexpr (expand-cond x))
               (and (seq? x) (symbol? (first x)) (= (first x) 'do))
-              (vec (interpose '(pop) (rest x)))
+              (into [:do] (interpose [:pop] (rest x)))
               (and (seq? x) (symbol? (first x)) (string/starts-with? (name (first x)) ".-"))
               (into [:get-field {:name (subs (name (first x)) 2)}] (rest x)) 
               (and (seq? x) (symbol? (first x)) (string/starts-with? (full-symbol-name (first x)) "."))
@@ -244,104 +232,6 @@
   (linearize* (de-sexpr expr)))
 
 
-(defn get-field-type [class-asm-type field-name]
-  (try
-    (let [klass (Class/forName
-                 (.getClassName ^Type class-asm-type))]
-
-      (->> (reflect/reflect klass)
-           :members
-           (filter (comp #{(symbol field-name)} :name))
-           first
-           :type
-           resolve-type))
-    (catch Exception e
-      (throw (ex-info "Could not get field type" {:type class-asm-type
-                                                  :field-name field-name})))))
-
-(defn get-method-types [class-asm-type method-name method-args]
-  (let [klass (Class/forName
-               (.getClassName ^Type class-asm-type))
-        methods (->> (reflect/reflect klass)
-                     :members
-                     (filter (comp #{(symbol method-name)} :name))
-                     (filter (fn [{:keys [parameter-types]}]
-                               (or (nil? method-args)
-                                   (= method-args parameter-types)))))
-        _ (when-not (= 1 (count methods))
-            (throw (ex-info "Method overloaded. Need to be more specific"
-                            {:class (.getName klass)
-                             :method-name method-name
-                             :methods methods
-                             :method-args method-args})))
-        {:keys [return-type parameter-types]}
-        (first methods)]
-    {:owner (resolve-type klass)
-     :return-type return-type
-     :method (Method. method-name (resolve-type return-type)
-                      (into-array Type (map resolve-type parameter-types)))}))
-
-
-(defn infer-type-get-field [arg-types [op-type value] instruction]
-  (case op-type
-    :arg (-> instruction
-             (assoc-in [1 :owner] (get arg-types (:value value)))
-             (assoc-in [1 :field-type] (get-field-type (get arg-types (:value value))
-                                                       (:name (second instruction)))))
-    instruction))
-
-
-
-(defn get-owner [sym]
-  (resolve-type (subs (namespace sym) 1)))
-
-
-(defn get-method-name [sym]
-  (first (string/split (name sym) #"\$")))
-
-(defn get-method-arg-types [sym]
-  (if (string/includes? (name sym) "$")
-    (mapv symbol (rest (string/split (name sym) #"\$")))
-    nil))
-
-
-
-(defn infer-static-field [current-instruction]
-  (let [owner (resolve-type (namespace (:name (second current-instruction))))
-        name (get-method-name (:name (second current-instruction)))]
-    (-> current-instruction
-        (assoc-in [1 :owner] owner)
-        (assoc-in [1 :name] name)
-        (assoc-in [1 :field-type] (get-field-type owner name)))))
-
-
-
-(defn infer-interop-types [arg-types linearized-code]
-  (reduce (fn [code current-instruction]
-            (concat
-             code
-             (let [result
-                   (case (first current-instruction)
-                     :get-field (infer-type-get-field arg-types (last code) current-instruction)
-                     :get-static-field (infer-static-field current-instruction)
-                     :invoke-virtual
-                     (assoc current-instruction 1 (get-method-types
-                                                   (get-owner (:name (second current-instruction)))
-                                                   (get-method-name (:name (second current-instruction)))
-                                                   (get-method-arg-types (:name (second current-instruction)))))
-                     :invoke-static
-
-                     (assoc current-instruction 1 (get-method-types
-                                                   (resolve-type (namespace (:name (second current-instruction))))
-                                                   (get-method-name (:name (second current-instruction)))
-                                                   (get-method-arg-types  (:name (second current-instruction)))))
-                     current-instruction)]
-               (if (= (:return-type (second result)) 'void)
-                 [result [:nil]]
-                 [result]))))
-          []
-          linearized-code))
-
 (defn log [& args]
   (apply prn args)
   (last args))
@@ -352,52 +242,27 @@
   (replace-sexprs sexpr (into {} (map vector arg-names (map (fn [i] (list 'arg i)) (range))))))
 
 
-(defn process-defn [[_ fn-name types & body]]
-  (let [arg-names (map first (partition 2 (butlast types)))
-        arg-types (mapv resolve-type (map second (partition 2 (butlast types))))]
-    {:type :fn
-     :class-name (string/replace (name fn-name) "." "/")
-     :arg-types arg-types
-     :return-type (resolve-type (last types))
-     :code (concat (->> (replace-args (replace-let-exprs body) arg-names)
-                        (cons 'do)
-                        linearize
-                        (infer-interop-types arg-types))
-                   [[:return]])}))
+(defn process-defn-for-types [[_ fn-name types & body] env]
 
+  (let [arg-names (mapv first (partition 2 (butlast types)))
+        arg-types (mapv second (partition 2 (butlast types)))]
+    (assoc-in env
+              [:functions fn-name]
+              {:type :fn
+               :class-name (string/replace (name fn-name) "." "/")
+               :arg-types arg-types
+               :return-type (last types)
+               :thing  (de-sexpr
+                        (replace-args (replace-let-exprs
+                                       (cons 'do  body))
+                                      arg-names) )
+               :code (type-checker/augment {:expr (de-sexpr
+                                                   (replace-args (replace-let-exprs
+                                                                  (cons 'do  body))
+                                                                 arg-names) )
 
+                                            :env (assoc env :arg-types arg-types)})})))
 
-(defn process-defn-for-types [[_ fn-name types & body]]
-  (let [arg-names (map first (partition 2 (butlast types)))
-        arg-types (map second (partition 2 (butlast types)))]
-    {:type :fn
-     :arg-types arg-types
-     :return-type (last types)
-     :code (de-sexpr body)}))
-
-
-(process-defn-for-types
- '(defn lang.generateCodeWithEnv [gen org.objectweb.asm.commons.GeneratorAdapter code lang.Code env java.util.Map java.util.Map]
-    (cond
-      (.equals (.-tagName code) "Label")
-      (if (.containsKey env (.-stringValue code))
-        (.mark gen (.get env (.-stringValue code)))
-        (do
-          (store-local {:local-type org.objectweb.asm.Label :name "label" }
-                       (.newLabel gen))
-          (.mark gen (.get env (.-stringValue code)))
-          (.put env (.-stringValue code) (load-local {:name "label"}))))
-
-      (.equals (.-tagName code) "Jump")
-      (if (.containsKey env (.-stringValue code))
-        (.goTo code (.get env (.-stringValue code)))
-
-        (let [label (.newLabel gen) org.objectweb.asm.Label]
-          (.goTo gen label)
-          (.put env (.-stringValue code) label)))
-      :else
-      (lang.myGenerateCode/invoke gen))
-    env))
 
 
 (defn process-enum [[_ enum-name & variants]]
@@ -414,14 +279,41 @@
          variants)})
 
 
+(defn process-enum-for-types [[_ enum-name & variants] env]
+  (-> env
+      (update :data-types merge {enum-name
+                                 (->> variants
+                                      (remove symbol?)
+                                      (mapcat (fn [variant]
+                                                (rest variant)))
+                                      (partition 2)
+                                      (map (fn [[n t]] [(str n) t]))
+                                      (map vec)
+                                      (into {"tagName" 'java.lang.String}))})
+      (update :functions merge (->> variants
+                                    (mapv (fn [variant]
+                                            (if (symbol? variant)
+                                              [variant {:arg-types []
+                                                        :return-type enum-name}]
+                                              [(first variant) {:arg-types (mapv second (partition 2 (rest variant)))
+                                                                :return-type enum-name}])))
+                                    (into {})))))
+
+
+
 (defn run-multiple* [s-exprs]
-  ;; Making an env to look functions up later.
   (reduce (fn [env s-expr]
             (case (first s-expr)
-              ;; Put types in env
-              defn (assoc env (second s-expr)
-                          (backend/make-fn (process-defn s-expr)))
-              defenum (do (backend/make-enum (process-enum s-expr)) env)
+              defn (let [[_ fn-name & _] s-expr
+                         env (process-defn-for-types s-expr env)
+                         function (get-in env [:functions fn-name])]
+                     (backend/make-fn (-> function
+                                          (update :arg-types #(map resolve-type %))
+                                          (update :return-type resolve-type)
+                                          (update :code (fn [code] (concat (linearize* code) [[:return]])))))
+                     env)
+              defenum (do (backend/make-enum (process-enum s-expr))
+                          (process-enum-for-types s-expr env))
               (throw (ex-info "unhandled" {:s-expr s-expr}))))
           {} s-exprs)
   nil)
@@ -433,47 +325,47 @@
 (jml
 
  (defenum lang.Code
-   PlusInt
-   SubInt
-   Dup
-   Pop
-   Print
-   Return
-   (Arg argIndex int)
-   (Math op int
-         opType asm-type)
-   (GetStatic owner asm-type
-              name string
-              resultType asm-type)
-   (InvokeStatic owner asm-type
-                 method org.objectweb.asm.commons.Method)
-   (InvokeVirtual owner asm-type
+    PlusInt
+    SubInt
+    Dup
+    Pop
+    Print
+    Return
+    (Arg argIndex int)
+    (Math op int
+          opType org.objectweb.asm.Type)
+    (GetStatic owner org.objectweb.asm.Type
+               name java.lang.String
+               resultType org.objectweb.asm.Type)
+    (InvokeStatic owner org.objectweb.asm.Type
                   method org.objectweb.asm.commons.Method)
-   (InvokeConstructor owner asm-type
-                      method org.objectweb.asm.commons.Method)
-   (New owner asm-type
-        method org.objectweb.asm.commons.Method)
-   (Bool boolValue bool)
-   (Int intValue int)
-   (String stringValue string)
-   (GetField owner asm-type
-             name string
-             fieldType asm-type)
-   (PutField owner asm-type
-             name string
-             fieldType asm-type)
-   (Label stringValue string)
-   (JumpNotEqual stringValue string
-                 compareType asm-type)
-   (JumpEqual stringValue string
-              compareType asm-type)
-   (JumpCmp stringValue string
-            compareType asm-type)
-   (Jump stringValue string))
+    (InvokeVirtual owner org.objectweb.asm.Type
+                   method org.objectweb.asm.commons.Method)
+    (InvokeConstructor owner org.objectweb.asm.Type
+                       method org.objectweb.asm.commons.Method)
+    (New owner org.objectweb.asm.Type
+         method org.objectweb.asm.commons.Method)
+    (Bool boolValue boolean)
+    (Int intValue int)
+    (String stringValue java.lang.String)
+    (GetField owner org.objectweb.asm.Type
+              name java.lang.String
+              fieldType org.objectweb.asm.Type)
+    (PutField owner org.objectweb.asm.Type
+              name java.lang.String
+              fieldType org.objectweb.asm.Type)
+    (Label stringValue java.lang.String)
+    (JumpNotEqual stringValue java.lang.String
+                  compareType org.objectweb.asm.Type)
+    (JumpEqual stringValue java.lang.String
+               compareType org.objectweb.asm.Type)
+    (JumpCmp stringValue java.lang.String
+             compareType org.objectweb.asm.Type)
+    (Jump stringValue java.lang.String))
 
  (defn lang.generateCode [gen org.objectweb.asm.commons.GeneratorAdapter code lang.Code void]
 
-   (cond
+    (cond
      (.String/equals (.-tagName code) "Arg")
      (.GeneratorAdapter/loadArg gen  (.-argIndex code))
 
@@ -496,13 +388,13 @@
      (.GeneratorAdapter/newInstance gen (.-owner code))
 
      (.String/equals (.-tagName code) "Bool")
-     (.GeneratorAdapter/push$boolean gen (.-boolValue code))
+     (.GeneratorAdapter/push gen (.-boolValue code))
 
      (.String/equals (.-tagName code) "Int")
-     (.GeneratorAdapter/push$int gen (.-intValue code))
+     (.GeneratorAdapter/push gen (.-intValue code))
 
      (.String/equals (.-tagName code) "String")
-     (.GeneratorAdapter/push$java.lang.String gen ^String (.-stringValue code))
+     (.GeneratorAdapter/push gen ^String (.-stringValue code))
 
      (.String/equals (.-tagName code) "GetField")
      (.GeneratorAdapter/getField gen (.-owner code) (.-name code) (.-fieldType code))
@@ -519,25 +411,26 @@
      (.String/equals (.-tagName code) "Return")
      (.GeneratorAdapter/returnValue gen)
 
-     ;; Hack for returning void
-     ;; We should probably just not add return if the type is void?
-     :else (.GeneratorAdapter/returnValue gen)))
+     ;; Can we do nil here??
+     ;; It isn't actually void. But maybe that is okay?
+     :else nil))
 
 
- (defn lang.myGenerateCode [gen GeneratorAdapter void]
+ (defn lang.myGenerateCode [gen org.objectweb.asm.commons.GeneratorAdapter void]
    (lang.generateCode/invoke gen (lang.Code/Int 42))
    (lang.generateCode/invoke gen (lang.Code/Return)))
+
 
  (defn lang.generateCodeWithEnv [gen org.objectweb.asm.commons.GeneratorAdapter code lang.Code env java.util.Map java.util.Map]
    (cond
      (.String/equals (.-tagName code) "Label")
      (if (.java.util.Map/containsKey env (.-stringValue code))
-       (.org.objectweb.asm.commons.GeneratorAdapter/mark$org.objectweb.asm.Label
+       (.org.objectweb.asm.commons.GeneratorAdapter/mark
         gen
         (.java.util.Map/get env (.-stringValue code)))
 
        (let [label (.org.objectweb.asm.commons.GeneratorAdapter/newLabel gen) org.objectweb.asm.Label]
-         (.org.objectweb.asm.commons.GeneratorAdapter/mark$org.objectweb.asm.Label
+         (.org.objectweb.asm.commons.GeneratorAdapter/mark
           gen
           (.java.util.Map/get env (.-stringValue code)))
          (.java.util.Map/put env (.-stringValue code) label)))
@@ -545,7 +438,7 @@
      (.String/equals (.-tagName code) "Jump")
      (if (.java.util.Map/containsKey env (.-stringValue code))
        (.org.objectweb.asm.commons.GeneratorAdapter/goTo
-        code
+        gen
         (.java.util.Map/get env (.-stringValue code)))
 
        (let [label (.org.objectweb.asm.commons.GeneratorAdapter/newLabel gen) org.objectweb.asm.Label]
@@ -555,8 +448,8 @@
      (lang.myGenerateCode/invoke gen))
    env)
 
- (defn lang.parseThatInt [s string int]
-   (Integer/parseInt$java.lang.String s))
+ (defn lang.parseThatInt [s java.lang.String int]
+   (java.lang.Integer/parseInt s))
 
  ;; this doesn't actually work because the type isn't resolved yet :(
  #_(defn lang.factorial [n int int]
@@ -565,7 +458,6 @@
      (mult-int n (lang.factorial/invoke (sub-int n 1)))))
 
  )
-
 
 
 

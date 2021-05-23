@@ -80,7 +80,6 @@
 
 
 (defn generate-code-with-env! [^GeneratorAdapter gen command env]
-
   (let [code (second command)]
     (case (first command)
       :label
