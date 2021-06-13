@@ -70,7 +70,7 @@
 
 
 (defn resolve-cmp-op [pred]
-  (let [[op arg1 arg2] pred
+  (let [[op _ arg1 arg2] pred
         ;; if it's greater or less than op, it should probably be INT_TYPE comparison, otherwise BOOL_TYPE. Obviously needs fixing
         cmp-type (if (#{:> :>= :< :<=} op) Type/INT_TYPE Type/BOOLEAN_TYPE)
         cmp-op (cmp-op-type op)
@@ -88,7 +88,7 @@
      :arg2 arg2}))
 
 
-(defn desugar-if [[tag pred t-branch f-branch :as node]]
+(defn desugar-if [[tag _ pred t-branch f-branch :as node]]
   (if (= tag :if)
     (let [true-label (gensym "true_label_")
           exit-label (gensym "exit_label_")
@@ -157,42 +157,62 @@
        x))
    expr))
 
+
+
+
 (defn de-sexpr [expr]
+  
   (walk/postwalk
-   (fn [x] (if (reduced? x)
-             @x
-             x))
-   (walk/prewalk
-    (fn [x]
-      (let [result
-            (cond
-              (and (seq? x) (= (first x) 'arg))
-              (reduced [:arg {:value (second x)}])
-              (and (seq? x) (symbol? (first x)) (= (first x) 'cond))
-              (de-sexpr (expand-cond x))
-              (and (seq? x) (symbol? (first x)) (= (first x) 'do))
-              (into [:do] (interpose [:pop] (rest x)))
-              (and (seq? x) (symbol? (first x)) (string/starts-with? (name (first x)) ".-"))
-              (into [:get-field {:name (subs (name (first x)) 2)}] (rest x)) 
-              (and (seq? x) (symbol? (first x)) (string/starts-with? (full-symbol-name (first x)) "."))
-              (into [:invoke-virtual {:name (first x)}] (rest x))
-              (and (seq? x) (symbol? (first x)) (string/includes? (full-symbol-name (first x)) "/"))
-              (into [:invoke-static {:name (first x)}] (rest x))
-              (map? x) (reduced x)
-              (seq? x) (vec x)
-              (and (vector? x) (keyword? (first x))) (reduced x)
-              (and (symbol? x) (string/includes? (full-symbol-name x) "/"))
-              [:get-static-field {:name x}]
-              (symbol? x) (keyword x)
-              (int? x) (reduced [:int x])
-              (boolean? x) (reduced [:bool x])
-              (string? x) (reduced [:string x])
-              (nil? x) (reduced [:nil])
-              :else x)]
-        (if (instance? clojure.lang.IObj result)
-          (with-meta result (meta x))
-          result)))
-    expr)))
+   (fn [x]
+     
+     (cond
+       (and (vector? x)
+            (not (map-entry? x))
+            (keyword? (first x))
+            (not (map? (second x)))
+            (not (vector? (second x))))
+       [(first x) {:value (second x)}]
+       (and (vector? x)
+              (not (map-entry? x))
+              (keyword? (first x))
+              (not (map? (second x))))
+       (into [(first x) {}] (rest x))
+       :else x))
+   (walk/postwalk
+    (fn [x] (if (reduced? x)
+              @x
+              x))
+    (walk/prewalk
+     (fn [x]
+       (let [result
+             (cond
+               (and (seq? x) (= (first x) 'arg))
+               (reduced [:arg {:value (second x)}])
+               (and (seq? x) (symbol? (first x)) (= (first x) 'cond))
+               (de-sexpr (expand-cond x))
+               (and (seq? x) (symbol? (first x)) (= (first x) 'do))
+               (into [:do] (interpose [:pop] (rest x)))
+               (and (seq? x) (symbol? (first x)) (string/starts-with? (name (first x)) ".-"))
+               (into [:get-field {:name (subs (name (first x)) 2)}] (rest x)) 
+               (and (seq? x) (symbol? (first x)) (string/starts-with? (full-symbol-name (first x)) "."))
+               (into [:invoke-virtual {:name (first x)}] (rest x))
+               (and (seq? x) (symbol? (first x)) (string/includes? (full-symbol-name (first x)) "/"))
+               (into [:invoke-static {:name (first x)}] (rest x))
+               (map? x) (reduced x)
+               (seq? x) (vec x)
+               (and (vector? x) (keyword? (first x))) (reduced x)
+               (and (symbol? x) (string/includes? (full-symbol-name x) "/"))
+               [:get-static-field {:name x}]
+               (symbol? x) (keyword x)
+               (int? x) (reduced [:int x])
+               (boolean? x) (reduced [:bool x])
+               (string? x) (reduced [:string x])
+               (nil? x) (reduced [:nil])
+               :else x)]
+         (if (instance? clojure.lang.IObj result)
+           (with-meta result (meta x))
+           result)))
+     expr))))
 
 
 (defn linearize* [code]
@@ -245,23 +265,21 @@
 (defn process-defn-for-types [[_ fn-name types & body] env]
 
   (let [arg-names (mapv first (partition 2 (butlast types)))
-        arg-types (mapv second (partition 2 (butlast types)))]
-    (assoc-in env
-              [:functions fn-name]
-              {:type :fn
-               :class-name (string/replace (name fn-name) "." "/")
-               :arg-types arg-types
-               :return-type (last types)
-               :thing  (de-sexpr
-                        (replace-args (replace-let-exprs
-                                       (cons 'do  body))
-                                      arg-names) )
-               :code (type-checker/augment {:expr (de-sexpr
-                                                   (replace-args (replace-let-exprs
-                                                                  (cons 'do  body))
-                                                                 arg-names) )
+        arg-types (mapv second (partition 2 (butlast types)))
+        env (assoc-in env
+                      [:functions fn-name]
+                      {:type :fn
+                       :class-name (string/replace (name fn-name) "." "/")
+                       :arg-types arg-types
+                       :return-type (last types)})]
+    (assoc-in env [:functions fn-name :code]
+              (time (type-checker/augment {:expr (de-sexpr
+                                                  (replace-args (replace-let-exprs
+                                                                 (cons 'do  body))
+                                                                arg-names) )
 
-                                            :env (assoc env :arg-types arg-types)})})))
+                                           :env (assoc env :arg-types arg-types)
+                                           :type (last types)})))))
 
 
 
@@ -313,7 +331,7 @@
                                           (update :code (fn [code] (concat (linearize* code) [[:return]])))))
                      env)
               defenum (do (backend/make-enum (process-enum s-expr))
-                          (process-enum-for-types s-expr env))
+                          (process-enum-for-types s-expr env))s
               (throw (ex-info "unhandled" {:s-expr s-expr}))))
           {} s-exprs)
   nil)
@@ -363,7 +381,7 @@
              compareType org.objectweb.asm.Type)
     (Jump stringValue java.lang.String))
 
- (defn lang.generateCode [gen org.objectweb.asm.commons.GeneratorAdapter code lang.Code void]
+  (defn lang.generateCode [gen org.objectweb.asm.commons.GeneratorAdapter code lang.Code void]
 
     (cond
      (.String/equals (.-tagName code) "Arg")
@@ -423,27 +441,29 @@
 
  (defn lang.generateCodeWithEnv [gen org.objectweb.asm.commons.GeneratorAdapter code lang.Code env java.util.Map java.util.Map]
    (cond
-     (.String/equals (.-tagName code) "Label")
-     (if (.java.util.Map/containsKey env (.-stringValue code))
-       (.org.objectweb.asm.commons.GeneratorAdapter/mark
+     (.equals (.-tagName code) "Label")
+     (if (.containsKey env (.-stringValue code))
+       (.mark
         gen
-        (.java.util.Map/get env (.-stringValue code)))
+        (.get env (.-stringValue code)))
 
-       (let [label (.org.objectweb.asm.commons.GeneratorAdapter/newLabel gen) org.objectweb.asm.Label]
-         (.org.objectweb.asm.commons.GeneratorAdapter/mark
+       (let [label (.newLabel gen) org.objectweb.asm.Label]
+         (.mark
           gen
-          (.java.util.Map/get env (.-stringValue code)))
-         (.java.util.Map/put env (.-stringValue code) label)))
+          (.get env (.-stringValue code)))
+         (.put env (.-stringValue code) label)
+         nil))
 
-     (.String/equals (.-tagName code) "Jump")
-     (if (.java.util.Map/containsKey env (.-stringValue code))
-       (.org.objectweb.asm.commons.GeneratorAdapter/goTo
+     (.equals (.-tagName code) "Jump")
+     (if (.containsKey env (.-stringValue code))
+       (.goTo
         gen
-        (.java.util.Map/get env (.-stringValue code)))
+        (.get env (.-stringValue code)))
 
-       (let [label (.org.objectweb.asm.commons.GeneratorAdapter/newLabel gen) org.objectweb.asm.Label]
-         (.org.objectweb.asm.commons.GeneratorAdapter/goTo gen label)
-         (.java.util.Map/put env (.-stringValue code) label)))
+       (let [label (.newLabel gen) org.objectweb.asm.Label]
+         (.goTo gen label)
+         (.put env (.-stringValue code) label)
+         nil))
      :else
      (lang.myGenerateCode/invoke gen))
    env)
@@ -452,8 +472,8 @@
    (java.lang.Integer/parseInt s))
 
  ;; this doesn't actually work because the type isn't resolved yet :(
- #_(defn lang.factorial [n int int]
-   (if (= n 0)
+ (defn lang.factorial [n int int]
+   (if (= n 1)
      1
      (mult-int n (lang.factorial/invoke (sub-int n 1)))))
 
@@ -465,8 +485,6 @@
 
 
 
-(lang.parseThatInt/invoke "42")
-
 
 (do
 
@@ -474,7 +492,18 @@
    "lang2.MyAwesomeCode"
    #(lang.myGenerateCode/invoke %))
 
-  (lang2.MyAwesomeCode/invoke))
+  [(lang2.MyAwesomeCode/invoke)
+
+
+
+   (lang.factorial/invoke 5)]
+
+
+
+  )
+
+
+
 
 
 

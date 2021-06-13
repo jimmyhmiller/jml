@@ -70,13 +70,55 @@
     val
     (throw (ex-info "Field not found" {:owner owner :field field :env env}))))
 
+(defn augment-then-synth [context]
+  (synth (assoc context :expr (augment (dissoc context :type)))))
+
 
 (defn check [{:keys [expr type env] :as context}]
+  (def my-context context)
   (case (first expr)
     :int (matches-type 'int context)
-    :bool (matches-type 'bool context)
+    :bool (matches-type 'boolean context)
     :string (matches-type 'java.lang.String context)
+    :mult-int (do
+                ;; TODO: Do we know the type of the subexpressions here?
+                (matches-type (augment-then-synth (assoc context :expr (nth expr 2)))
+                              (assoc context :expr (nth expr 2)))
+                (matches-type (augment-then-synth (assoc context :expr (nth expr 3)))
+                              (assoc context :expr (nth expr 3))) 
+                (matches-type 'int context))
+    :sub-int (do
+               ;; TODO: Do we know the type of the subexpressions here?
+               (matches-type (augment-then-synth (assoc context :expr (nth expr 2)))
+                             (assoc context :expr (nth expr 2)))
+               (matches-type (augment-then-synth (assoc context :expr (nth expr 3)))
+                             (assoc context :expr (nth expr 3)))
+               (matches-type 'int context))
     :arg (matches-type (get-in env [:arg-types (:value (second expr))]) context)
+    :if (do
+          (let [pred (augment-then-synth (assoc  (dissoc context :type) :expr (nth expr 2)))
+                branch1 (augment-then-synth (assoc context :expr (nth expr 3)))
+                branch2 (augment-then-synth (assoc context :expr (nth expr 4)))]
+            (matches-type pred (assoc context :expr (nth expr 2) :type 'boolean))
+            (matches-type branch1 (assoc context :expr (nth expr 3)))
+            (matches-type branch2 (assoc context :expr (nth expr 4)))))
+    := (matches-type 'boolean context)
+    :invoke-static (do
+                     (matches-type (:return-type (second expr)) context)
+                     (doseq [[type expr] (map vector (:arg-types (second expr)) (rest (rest expr)))]
+                       (check (assoc context :expr expr :type type))))
+    :invoke-virtual (do
+                      (matches-type (:return-type (second expr)) context)
+                      (check (assoc context :expr (nth expr 2) :type (:owner (second expr))))
+                      (doseq [[type expr] (map vector (:arg-types (second expr)) (rest (rest (rest expr))))]
+                        (check (assoc context :expr expr :type type))))
+    :get-field (matches-type (:field-type (second expr)) context)
+    :do (matches-type (augment-then-synth (assoc context :expr (last expr))) context)
+    :nil (matches-type 'void context)
+    :pop (matches-type 'void context)
+    ;; Need to actually be augmenting env
+    :store-local (matches-type 'void context)
+    :load-local env
     (throw (ex-info "No matching check" {:expr expr :type type :env env}))))
 
 
@@ -86,6 +128,8 @@
     :int 'int
     :bool 'boolean
     :string 'java.lang.String
+    :sub-int 'int
+    :mult-int 'int
     :arg (get-in env [:arg-types (:value (second expr))])
     :get-field (get-field-type (:owner (second expr)) (:name (second expr)) env)
     :invoke-virtual (if-let [return-type (:return-type (second expr))]
@@ -97,6 +141,13 @@
                      (throw (ex-info "Can't synth invoke static" {:expr expr :env env})))
     ;; Fix by looking in env
     :load-local 'java.lang.Object
+    := 'boolean
+    :do (augment-then-synth {:expr (last expr) :env env})
+    :nil 'void
+    ;; Is this right?
+    :if (synth {:expr (last expr) :env env})
+    :pop 'void
+    :store-local 'void
     (throw (ex-info "No matching synth" {:expr expr :env env}))))
 
 
@@ -141,9 +192,17 @@
     [:do expr [:nil]]
     expr))
 
+(def context2 nil)
+context
+
+
 
 (defn augment [{:keys [expr env type] :as context}]
-  (when type
+
+
+  (when-not context2
+    (def context2 context))
+  (when (and type (not= (first expr) :do))
     (check context))
 
   (case (first expr)
@@ -177,37 +236,72 @@
                                     (assoc :method method))]
                                (concat [augmented-this] augmented-args)))))
     :invoke-static (let [[tag attrs & [& args]] expr]
-                     (let [this (symbol (namespace (:name attrs)))
-                           method-name (name (:name attrs))
-                           this-type this
-                           augmented-args (mapv #(augment (assoc context :expr %)) args)
-                           arg-types (mapv #(synth (assoc context :expr %)) augmented-args)
-                           {:keys [method return-type]} (get-method-info context
-                                                                         this
-                                                                         method-name
-                                                                         args)]
-                       (wrap-void-types
-                        (into [tag
-                               (-> attrs
-                                   (assoc :owner this-type)
-                                   ;; Should we do parameters from reflect?
-                                   ;; Not sure
-                                   ;; Could be object instead of string for example
-                                   (assoc :arg-types arg-types)
-                                   (assoc :return-type return-type)
-                                   (assoc :name method-name)
-                                   (assoc :method method))]
-                              augmented-args))))
-    :do (into [(first expr)]
-              ;; Need to reduce?
-              (mapv (fn [expr] (augment (assoc context :expr expr))) (rest expr)))
-    :if  (into [(first expr)]
-               (mapv (fn [expr] (augment (assoc context :expr expr)))
-                     (rest expr)))
+                     ;; We already augmented
+                     (if (:return-type attrs)
+                       expr
+                       (let [this (symbol (namespace (:name attrs)))
+                             method-name (name (:name attrs))
+                             this-type this
+                             augmented-args (mapv #(augment (assoc context :expr %)) args)
+                             arg-types (mapv #(synth (assoc context :expr %)) augmented-args)
+                             {:keys [method return-type]} (get-method-info context
+                                                                           this
+                                                                           method-name
+                                                                           args)]
+                         (wrap-void-types
+                          (into [tag
+                                 (-> attrs
+                                     (assoc :owner this-type)
+                                     ;; Should we do parameters from reflect?
+                                     ;; Not sure
+                                     ;; Could be object instead of string for example
+                                     (assoc :arg-types arg-types)
+                                     (assoc :return-type return-type)
+                                     (assoc :name method-name)
+                                     (assoc :method method))]
+                                augmented-args)))))
+    :do (do
+          (let [result
+                (into [(first expr) (second expr)]
+                      ;; Need to reduce?
+                      (mapv (fn [expr] (let [result
+                                             (augment (assoc (dissoc context :type) :expr expr))]
+                                         (check {:expr result
+                                                 :env env
+                                                 :type (synth {:expr result :env env})})
+                                         result))
+                            (rest (rest expr))))]
+
+            (when type
+              (check (assoc context :expr (last result))))
+            result))
+    :if  (into [(first expr) (second expr) (let [result
+                                                 (augment (assoc (dissoc context :type) :expr (nth expr 2)))]
+                                             (check {:expr result
+                                                     :env env
+                                                     :type 'boolean})
+                                             result)]
+               (mapv (fn [expr] (let [result
+                                      (augment (assoc (dissoc context :type) :expr expr))]
+                                  (check {:expr result
+                                          :env env
+                                          :type (synth {:expr result :env env})})
+                                  result))
+                     (rest (rest (rest expr)))))
     :pop [:pop]
-    (into [(first expr) (second expr)]
-          (mapv (fn [expr] (augment (assoc context :expr expr)))
-                (rest (rest expr))))))
+
+    
+
+    (do
+      (into [(first expr) (second expr)]
+            (mapv (fn [expr]
+                    (let [result
+                          (augment (assoc (dissoc context :type) :expr expr))]
+                      (check {:expr result
+                              :env env
+                              :type (synth {:expr result :env env})})
+                      result))
+                  (rest (rest expr)))))))
 
 
 
