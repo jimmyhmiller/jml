@@ -75,7 +75,6 @@
 
 
 (defn check [{:keys [expr type env] :as context}]
-  (def my-context context)
   (case (first expr)
     :int (matches-type 'int context)
     :bool (matches-type 'boolean context)

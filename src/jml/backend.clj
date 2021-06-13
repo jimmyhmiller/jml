@@ -175,6 +175,9 @@
 
 
 
+(def loader jml.decompile/load-bytecode)
+
+
 (defn make-fn [{:keys [class-name code arg-types] :as description}]
   (let [writer (ClassWriter. (int (+ ClassWriter/COMPUTE_FRAMES ClassWriter/COMPUTE_MAXS)))]
     (initialize-class writer class-name)
@@ -182,7 +185,7 @@
     (generate-invoke-method writer description)
     (.visitEnd writer)
 
-    (jml.decompile/print-and-load-all writer class-name)))
+    (loader writer class-name)))
 
 
 
@@ -225,7 +228,7 @@
     (run! (partial make-field writer) fields)
     (make-struct-constructor writer description)
     (.visitEnd writer)
-    (jml.decompile/print-and-load-bytecode writer class-name)
+    (loader writer class-name)
     class-name))
 
 
@@ -334,7 +337,7 @@
     (run-indexed! (partial make-enum-variant writer class-name) variants)
     (.visitEnd writer)
     ;; Should have a way to return class and not print
-    (jml.decompile/print-and-load-bytecode writer class-name)))
+    (loader writer class-name)))
 
 
 
@@ -348,4 +351,4 @@
     (callback gen)
     (.endMethod ^GeneratorAdapter gen)
     (.visitEnd writer)
-    (jml.decompile/print-and-load-all writer class-name)))
+    (loader writer class-name)))

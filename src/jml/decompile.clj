@@ -29,6 +29,14 @@
 (defn to-bytecode [byte-array class-name]
   (decompile bytecode-decompiler byte-array class-name))
 
+(defn load-byte-code [writer class-name]
+  (let [byteArray (.toByteArray ^ClassWriter writer)]
+    (.defineClass ^clojure.lang.DynamicClassLoader
+                  (clojure.lang.DynamicClassLoader.)
+                  (.replace ^String class-name \/ \.)
+                  byteArray
+                  nil)))
+
 (defn print-and-load-bytecode [writer class-name]
   (let [byteArray (.toByteArray ^ClassWriter writer)]
     (jml.decompile/to-bytecode byteArray class-name)
