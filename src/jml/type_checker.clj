@@ -212,28 +212,30 @@ context
                        (assoc-in [1 :owner] child-type)
                        (assoc-in [1 :field-type] field-type))))
     :invoke-virtual (let [[tag attrs & [this & args]] expr]
-                      (let [method-name (remove-dot (name (:name attrs)))
-                            augmented-this (augment (assoc context :expr this))
-                            this-type (synth (assoc context :expr augmented-this))
-                            ;; Duplicated in get-method-info
-                            augmented-args (mapv #(augment (assoc context :expr %)) args)
-                            arg-types (mapv #(synth (assoc context :expr %)) augmented-args)
-                            {:keys [method return-type]} (get-method-info context
-                                                                          this-type
-                                                                          method-name
-                                                                          args)]
-                        (wrap-void-types
-                         (into [tag
-                                (-> attrs
-                                    (assoc :owner this-type)
-                                    ;; Should we do parameters from reflect?
-                                    ;; Not sure
-                                    ;; Could be object instead of string for example
-                                    (assoc :arg-types arg-types)
-                                    (assoc :return-type return-type)
-                                    (assoc :name method-name)
-                                    (assoc :method method))]
-                               (concat [augmented-this] augmented-args)))))
+                      (if (:return-type attrs)
+                        expr
+                        (let [method-name (remove-dot (name (:name attrs)))
+                              augmented-this (augment (assoc context :expr this))
+                              this-type (synth (assoc context :expr augmented-this))
+                              ;; Duplicated in get-method-info
+                              augmented-args (mapv #(augment (assoc context :expr %)) args)
+                              arg-types (mapv #(synth (assoc context :expr %)) augmented-args)
+                              {:keys [method return-type]} (get-method-info context
+                                                                            this-type
+                                                                            method-name
+                                                                            args)]
+                          (wrap-void-types
+                           (into [tag
+                                  (-> attrs
+                                      (assoc :owner this-type)
+                                      ;; Should we do parameters from reflect?
+                                      ;; Not sure
+                                      ;; Could be object instead of string for example
+                                      (assoc :arg-types arg-types)
+                                      (assoc :return-type return-type)
+                                      (assoc :name method-name)
+                                      (assoc :method method))]
+                                 (concat [augmented-this] augmented-args))))))
     :invoke-static (let [[tag attrs & [& args]] expr]
                      ;; We already augmented
                      (if (:return-type attrs)
@@ -301,6 +303,15 @@ context
                               :type (synth {:expr result :env env})})
                       result))
                   (rest (rest expr)))))))
+
+
+
+
+
+
+
+
+
 
 
 
@@ -376,100 +387,5 @@ context
             :env '{:arg-types [org.objectweb.asm.commons.GeneratorAdapter lang.Code java.util.Map]
                    :data-types {lang.Code {"stringValue" java.lang.String}}}})
 
-
-
-  (comment
-
-
-
-    (def example
-      '{:type :fn,
-        :arg-names (gen code env),
-        :arg-types
-        (org.objectweb.asm.commons.GeneratorAdapter
-         lang.Code
-         java.util.Map),
-        :return-type java.util.Map,
-        :code
-        [:do
-         [:if
-          [:invoke-virtual
-           {:name .equals}
-           [:get-field {:name "tagName"} [:arg {:value 1}]]
-           [:string "Label"]]
-          [:if
-           [:invoke-virtual
-            {:name .containsKey}
-            [:arg {:value 2}]
-            [:get-field {:name "stringValue"} [:arg {:value 1}]]]
-           [:invoke-virtual
-            {:name .mark}
-            [:arg {:value 0}]
-            [:invoke-virtual
-             {:name .get}
-             [:arg {:value 2}]
-             [:get-field {:name "stringValue"} [:arg {:value 1}]]]]
-           [:do
-            [:store-local
-             {:local-type org.objectweb.asm.Label, :name "label"}
-             [:invoke-virtual {:name .newLabel} [:arg {:value 0}]]]
-            [:pop]
-            [:invoke-virtual
-             {:name .mark}
-             [:arg {:value 0}]
-             [:invoke-virtual
-              {:name .get}
-              [:arg {:value 2}]
-              [:get-field {:name "stringValue"} [:arg {:value 1}]]]]
-            [:pop]
-            [:invoke-virtual
-             {:name .put}
-             [:arg {:value 2}]
-             [:get-field {:name "stringValue"} [:arg {:value 1}]]
-             [:load-local {:name "label"}]]]]
-          [:if
-           [:invoke-virtual
-            {:name .equals}
-            [:get-field {:name "tagName"} [:arg {:value 1}]]
-            [:string "Jump"]]
-           [:if
-            [:invoke-virtual
-             {:name .containsKey}
-             [:arg {:value 2}]
-             [:get-field {:name "stringValue"} [:arg {:value 1}]]]
-            [:invoke-virtual
-             {:name .goTo}
-             [:arg {:value 0}]
-             [:invoke-virtual
-              {:name .get}
-              [:arg {:value 2}]
-              [:get-field {:name "stringValue"} [:arg {:value 1}]]]]
-            [:do
-             [:store-local
-              {:name "label", :local-type org.objectweb.asm.Label}
-              [:invoke-virtual {:name .newLabel} [:arg {:value 0}]]]
-             [:pop]
-             [:invoke-virtual
-              {:name .goTo}
-              [:arg {:value 0}]
-              [:load-local {:name "label"}]]
-             [:pop]
-             [:invoke-virtual
-              {:name .put}
-              [:arg {:value 2}]
-              [:get-field {:name "stringValue"} [:arg {:value 1}]]
-              [:load-local {:name "label"}]]]]
-           [:invoke-static
-            {:name lang.myGenerateCode/invoke}
-            [:arg {:value 0}]]]]
-         [:arg {:value 2}]]})
-
-
-
-
-
-
-
-    )
   
   )

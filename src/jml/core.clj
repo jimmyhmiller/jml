@@ -429,8 +429,6 @@
      (.String/equals (.-tagName code) "Return")
      (.GeneratorAdapter/returnValue gen)
 
-     ;; Can we do nil here??
-     ;; It isn't actually void. But maybe that is okay?
      :else nil))
 
 
