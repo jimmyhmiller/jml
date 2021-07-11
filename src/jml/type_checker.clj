@@ -88,8 +88,6 @@
                              :field-name name})))]
     (:type (first fields))))
 
-
-
 (defn get-field-type [owner field env]
   (if-let [val (get-in env [:data-types owner field])]
     val
@@ -111,7 +109,7 @@
                 (matches-type (augment-then-synth (assoc context :expr (nth expr 2)))
                               (assoc context :expr (nth expr 2)))
                 (matches-type (augment-then-synth (assoc context :expr (nth expr 3)))
-                              (assoc context :expr (nth expr 3))) 
+                              (assoc context :expr (nth expr 3)))
                 (matches-type 'int context))
     :sub-int (do
                ;; TODO: Do we know the type of the subexpressions here?
@@ -139,6 +137,8 @@
                       (doseq [[type expr] (map vector (:arg-types (second expr)) (rest (rest (rest expr))))]
                         (check (assoc context :expr expr :type type))))
     :get-field (matches-type (:field-type (second expr)) context)
+    :get-static-field (matches-type (:field-type (second expr)) context)
+    :class (matches-type 'java.lang.Class context)
     :do (matches-type (augment-then-synth (assoc context :expr (last expr))) context)
     :nil (matches-type 'void context)
     :pop (matches-type 'void context)
@@ -148,6 +148,8 @@
     (throw (ex-info "No matching check" {:expr expr :type type :env env}))))
 
 
+
+(def expr [:new {:value :org.objectweb.asm.commons.Method}])
 
 (defn synth [{:keys [expr env]}]
   (case (first expr)
@@ -175,6 +177,10 @@
     :if (synth {:expr (last expr) :env env})
     :pop 'void
     :store-local 'void
+    :new
+    (symbol (name (:value (second expr))))
+    :class
+    'java.lang.Class
     (throw (ex-info "No matching synth" {:expr expr :env env}))))
 
 
@@ -322,8 +328,19 @@
                                   result))
                      (rest (rest (rest expr)))))
     :pop [:pop]
+    :new     (let [[tag attrs & [& args]] expr
+                   owner (symbol (:value attrs))
+                   field-type (synth (assoc context :expr expr))]
+               (into [:new (assoc attrs :owner owner)]
+                     (mapv (fn [expr]
+                             (let [result
+                                   (augment (assoc (dissoc context :type) :expr expr))]
+                               (check {:expr result
+                                       :env env
+                                       :type (synth {:expr result :env env})})
+                               result))
+                           args)))
 
-    
 
     (do
       (into [(first expr) (second expr)]
@@ -419,5 +436,5 @@
             :env '{:arg-types [org.objectweb.asm.commons.GeneratorAdapter lang.Code java.util.Map]
                    :data-types {lang.Code {"stringValue" java.lang.String}}}})
 
-  
+
   )

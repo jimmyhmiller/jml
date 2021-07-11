@@ -47,6 +47,8 @@
       (.invokeConstructor gen (:owner code) (:method code))
       :new
       (.newInstance gen (:owner code))
+      :class
+      (.newInstance gen (Type/getType (Class/forName (name (:value code)))))
       :bool
       ;; Should assert bool?
       (.push gen (boolean (:value code)))

@@ -161,10 +161,10 @@
 
 
 (defn de-sexpr [expr]
-  
+
   (walk/postwalk
    (fn [x]
-     
+
      (cond
        (and (vector? x)
             (not (map-entry? x))
@@ -192,8 +192,10 @@
                (de-sexpr (expand-cond x))
                (and (seq? x) (symbol? (first x)) (= (first x) 'do))
                (into [:do] (interpose [:pop] (rest x)))
+               (and (seq? x) (symbol? (first x)) (= (first x) 'new))
+               (into [:new {:value (second x)}] (rest (rest x)))
                (and (seq? x) (symbol? (first x)) (string/starts-with? (name (first x)) ".-"))
-               (into [:get-field {:name (subs (name (first x)) 2)}] (rest x)) 
+               (into [:get-field {:name (subs (name (first x)) 2)}] (rest x))
                (and (seq? x) (symbol? (first x)) (string/starts-with? (full-symbol-name (first x)) "."))
                (into [:invoke-virtual {:name (first x)}] (rest x))
                (and (seq? x) (symbol? (first x)) (string/includes? (full-symbol-name (first x)) "/"))
@@ -272,7 +274,9 @@
                  sexpr))
 
 
+(def my-expr (atom {}))
 
+(@my-expr 'lang.generateCode)
 
 (defn process-defn-for-types [[_ fn-name types & body] env]
 
@@ -285,11 +289,13 @@
                        :arg-types arg-types
                        :return-type (last types)})]
     (assoc-in env [:functions fn-name :code]
-              (time (type-checker/augment {:expr (-> (cons 'do body)
-                                                     replace-let-exprs
-                                                     (replace-args arg-names)
-                                                     (replace-aliases (:aliases env))
-                                                     de-sexpr)
+              (time (type-checker/augment {:expr (let [expr (-> (cons 'do body)
+                                                                replace-let-exprs
+                                                                (replace-args arg-names)
+                                                                (replace-aliases (:aliases env))
+                                                                de-sexpr)]
+                                                   (swap! my-expr assoc fn-name expr)
+                                                   expr)
                                            :env (assoc env :arg-types arg-types)
                                            :type (last types)})))))
 
@@ -422,13 +428,13 @@
 
      (.equals (.-tagName code) "SubInt")
      (lang.generateCode/invoke gen (lang.Code/Math GeneratorAdapter/SUB Type/INT_TYPE))
-     
+
      (.String/equals (.-tagName code) "Arg")
      (.loadArg gen  (.-argIndex code))
 
      (.equals (.-tagName code) "Math")
      (.math gen (.-op code) (.-opType code))
-     
+
      (.equals (.-tagName code) "GetField")
      (.getField gen (.-owner code) (.-name code) (.-fieldType code))
 
@@ -461,7 +467,7 @@
 
      (.equals (.-tagName code) "Nil")
      (.visitInsn gen Opcodes/ACONST_NULL)
-     
+
      (.equals (.-tagName code) "Dup")
      (.dup gen)
 
@@ -480,12 +486,20 @@
        (.swap gen)
        (.invokeVirtual gen
                        (Type/getType "Ljava/io/PrintStream;")
-                       (org.objectweb.asm.commons.Method/getMethod "void println(int)")))
+
+                       (new org.objectweb.asm.commons.Method "println"
+                            Type/VOID_TYPE
+                            (let [arr (java.lang.reflect.Array/newInstance (class org.objectweb.asm.Type) 1) java.lang.Object]
+                              (java.lang.reflect.Array/set arr 0 Type/INT_TYPE)
+                              arr))
+                     #_(org.objectweb.asm.commons.Method/getMethod "void println(int)")))
+
      (.equals (.-tagName code) "Return")
      (.returnValue gen)
 
      :else nil))
 
+ (reflect/reflect  java.lang.reflect.Array )
 
  (defn lang.myGenerateCode [gen org.objectweb.asm.commons.GeneratorAdapter void]
    (lang.generateCode/invoke gen (lang.Code/Int 42))
@@ -558,10 +572,3 @@
 
 
   )
-
-
-
-
-
-
-
