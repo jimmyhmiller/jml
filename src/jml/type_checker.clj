@@ -7,6 +7,7 @@
 
 (declare check)
 (declare synth)
+(declare augment)
 
 (defn matches-type [actual-type {:keys [type expr env]}]
   (if (= actual-type type)
@@ -74,6 +75,8 @@
   (synth (assoc context :expr (augment (dissoc context :type)))))
 
 
+
+
 (defn check [{:keys [expr type env] :as context}]
   (case (first expr)
     :int (matches-type 'int context)
@@ -138,6 +141,9 @@
     :invoke-static (if-let [return-type (:return-type (second expr))]
                      return-type
                      (throw (ex-info "Can't synth invoke static" {:expr expr :env env})))
+    :get-static-field (if-let [return-type (:return-type (second expr))]
+                        return-type
+                        (throw (ex-info "Can't synth get static field" {:expr expr :env env})))
     ;; Fix by looking in env
     :load-local 'java.lang.Object
     := 'boolean
@@ -151,7 +157,7 @@
 
 
 
-(declare augment)
+
 
 (defn get-method-info [{:keys [env] :as context} owner-name method-name args ]
 
@@ -191,16 +197,10 @@
     [:do expr [:nil]]
     expr))
 
-(def context2 nil)
-context
-
 
 
 (defn augment [{:keys [expr env type] :as context}]
 
-
-  (when-not context2
-    (def context2 context))
   (when (and type (not= (first expr) :do))
     (check context))
 

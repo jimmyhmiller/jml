@@ -343,47 +343,54 @@
 (jml
 
  (defenum lang.Code
-    PlusInt
-    SubInt
-    Dup
-    Pop
-    Print
-    Return
-    (Arg argIndex int)
-    (Math op int
-          opType org.objectweb.asm.Type)
-    (GetStatic owner org.objectweb.asm.Type
-               name java.lang.String
-               resultType org.objectweb.asm.Type)
-    (InvokeStatic owner org.objectweb.asm.Type
+   MultInt
+   PlusInt
+   SubInt
+   Dup
+   Pop
+   Print
+   Return
+   (Arg argIndex int)
+   (Math op int
+         opType org.objectweb.asm.Type)
+   (GetStatic owner org.objectweb.asm.Type
+              name java.lang.String
+              resultType org.objectweb.asm.Type)
+   (InvokeStatic owner org.objectweb.asm.Type
+                 method org.objectweb.asm.commons.Method)
+   (InvokeVirtual owner org.objectweb.asm.Type
                   method org.objectweb.asm.commons.Method)
-    (InvokeVirtual owner org.objectweb.asm.Type
-                   method org.objectweb.asm.commons.Method)
-    (InvokeConstructor owner org.objectweb.asm.Type
-                       method org.objectweb.asm.commons.Method)
-    (New owner org.objectweb.asm.Type
-         method org.objectweb.asm.commons.Method)
-    (Bool boolValue boolean)
-    (Int intValue int)
-    (String stringValue java.lang.String)
-    (GetField owner org.objectweb.asm.Type
-              name java.lang.String
-              fieldType org.objectweb.asm.Type)
-    (PutField owner org.objectweb.asm.Type
-              name java.lang.String
-              fieldType org.objectweb.asm.Type)
-    (Label stringValue java.lang.String)
-    (JumpNotEqual stringValue java.lang.String
-                  compareType org.objectweb.asm.Type)
-    (JumpEqual stringValue java.lang.String
-               compareType org.objectweb.asm.Type)
-    (JumpCmp stringValue java.lang.String
-             compareType org.objectweb.asm.Type)
-    (Jump stringValue java.lang.String))
+   (InvokeConstructor owner org.objectweb.asm.Type
+                      method org.objectweb.asm.commons.Method)
+   (New owner org.objectweb.asm.Type
+        method org.objectweb.asm.commons.Method)
+   (Bool boolValue boolean)
+   (Int intValue int)
+   (String stringValue java.lang.String)
+   (GetField owner org.objectweb.asm.Type
+             name java.lang.String
+             fieldType org.objectweb.asm.Type)
+   (PutField owner org.objectweb.asm.Type
+             name java.lang.String
+             fieldType org.objectweb.asm.Type)
+   (Label stringValue java.lang.String)
+   (JumpNotEqual stringValue java.lang.String
+                 compareType org.objectweb.asm.Type)
+   (JumpEqual stringValue java.lang.String
+              compareType org.objectweb.asm.Type)
+   (JumpCmp stringValue java.lang.String
+            compareType org.objectweb.asm.Type)
+   (Jump stringValue java.lang.String))
 
-  (defn lang.generateCode [gen org.objectweb.asm.commons.GeneratorAdapter code lang.Code void]
+ (defn lang.generateCode [gen org.objectweb.asm.commons.GeneratorAdapter code lang.Code void]
 
-    (cond
+   (cond
+
+   #_  (.equals (.-tagName code) "MultInt")
+   #_  (.GeneratorAdapter/math gen
+                             org.objectweb.asm.commons.GeneratorAdapter/MUL
+                             org.objectweb.asm.Type/INT_TYPE)
+     
      (.String/equals (.-tagName code) "Arg")
      (.GeneratorAdapter/loadArg gen  (.-argIndex code))
 

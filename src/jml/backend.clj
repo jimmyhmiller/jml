@@ -18,7 +18,7 @@
   (let [code (second command)]
     (case (first command)
 
-      :mult-int  (.math gen GeneratorAdapter/MUL Type/INT_TYPE)
+      :mult-int (.math gen GeneratorAdapter/MUL Type/INT_TYPE)
 
       :plus-int
       (recur gen [:math {:op GeneratorAdapter/ADD
