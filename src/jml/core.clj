@@ -262,6 +262,18 @@
   (replace-sexprs sexpr (into {} (map vector arg-names (map (fn [i] (list 'arg i)) (range))))))
 
 
+(defn replace-aliases [sexpr aliases]
+  (walk/postwalk (fn [x]
+                   (cond (not (symbol? x)) x
+                         (simple-symbol? x) x
+                         (contains? aliases (symbol (namespace x)))
+                         (symbol (name (get aliases (symbol (namespace x)))) (name x))
+                         :else x))
+                 sexpr))
+
+
+
+
 (defn process-defn-for-types [[_ fn-name types & body] env]
 
   (let [arg-names (mapv first (partition 2 (butlast types)))
@@ -273,11 +285,11 @@
                        :arg-types arg-types
                        :return-type (last types)})]
     (assoc-in env [:functions fn-name :code]
-              (time (type-checker/augment {:expr (de-sexpr
-                                                  (replace-args (replace-let-exprs
-                                                                 (cons 'do  body))
-                                                                arg-names) )
-
+              (time (type-checker/augment {:expr (-> (cons 'do body)
+                                                     replace-let-exprs
+                                                     (replace-args arg-names)
+                                                     (replace-aliases (:aliases env))
+                                                     de-sexpr)
                                            :env (assoc env :arg-types arg-types)
                                            :type (last types)})))))
 
@@ -319,6 +331,10 @@
 
 
 
+(defn process-alias [[_ alias source] env]
+  (assoc-in env [:aliases alias] source))
+
+
 (defn run-multiple* [s-exprs]
   (reduce (fn [env s-expr]
             (case (first s-expr)
@@ -331,9 +347,13 @@
                                           (update :code (fn [code] (concat (linearize* code) [[:return]])))))
                      env)
               defenum (do (backend/make-enum (process-enum s-expr))
-                          (process-enum-for-types s-expr env))s
+                          (process-enum-for-types s-expr env))
+              defalias (process-alias s-expr env)
               (throw (ex-info "unhandled" {:s-expr s-expr}))))
-          {} s-exprs)
+          {:functions {}
+           :data-types {}
+           :aliases {}}
+          s-exprs)
   nil)
 
 
@@ -341,6 +361,11 @@
   (run-multiple* s-exprs))
 
 (jml
+
+
+ (defalias GeneratorAdapter org.objectweb.asm.commons.GeneratorAdapter)
+ (defalias Type org.objectweb.asm.Type)
+ (defalias Opcodes org.objectweb.asm.Opcodes)
 
  (defenum lang.Code
    MultInt
@@ -350,6 +375,7 @@
    Pop
    Print
    Return
+   Nil
    (Arg argIndex int)
    (Math op int
          opType org.objectweb.asm.Type)
@@ -386,61 +412,74 @@
 
    (cond
 
-   #_  (.equals (.-tagName code) "MultInt")
-   #_  (.GeneratorAdapter/math gen
-                             org.objectweb.asm.commons.GeneratorAdapter/MUL
-                             org.objectweb.asm.Type/INT_TYPE)
+     (.equals (.-tagName code) "MultInt")
+     (.math gen
+            GeneratorAdapter/MUL
+            org.objectweb.asm.Type/INT_TYPE)
+
+     (.equals (.-tagName code) "PlusInt")
+     (lang.generateCode/invoke gen (lang.Code/Math GeneratorAdapter/ADD Type/INT_TYPE))
+
+     (.equals (.-tagName code) "SubInt")
+     (lang.generateCode/invoke gen (lang.Code/Math GeneratorAdapter/SUB Type/INT_TYPE))
      
      (.String/equals (.-tagName code) "Arg")
-     (.GeneratorAdapter/loadArg gen  (.-argIndex code))
+     (.loadArg gen  (.-argIndex code))
 
-     (.String/equals (.-tagName code) "Math")
-     (.GeneratorAdapter/math gen (.-op code) (.-opType code))
+     (.equals (.-tagName code) "Math")
+     (.math gen (.-op code) (.-opType code))
+     
+     (.equals (.-tagName code) "GetField")
+     (.getField gen (.-owner code) (.-name code) (.-fieldType code))
 
-     (.String/equals (.-tagName code) "GetStaticField")
-     (.GeneratorAdapter/getStatic gen (.-owner code) (.-name code) (.-resultType code))
+     (.equals (.-tagName code) "PutField")
+     (.putField gen (.-owner code) (.-name code) (.-fieldType code))
 
-     (.String/equals (.-tagName code) "InvokeStatic")
-     (.GeneratorAdapter/invokeStatic gen (.-owner code) (.-method code))
+     (.equals (.-tagName code) "GetStaticField")
+     (.getStatic gen (.-owner code) (.-name code) (.-resultType code))
 
-     (.String/equals (.-tagName code) "InvokeVirtual")
-     (.GeneratorAdapter/invokeVirtual gen (.-owner code) (.-method code))
+     (.equals (.-tagName code) "InvokeStatic")
+     (.invokeStatic gen (.-owner code) (.-method code))
 
-     (.String/equals (.-tagName code) "InvokeConstructor")
-     (.GeneratorAdapter/invokeConstructor gen (.-owner code) (.-method code))
+     (.equals (.-tagName code) "InvokeVirtual")
+     (.invokeVirtual gen (.-owner code) (.-method code))
 
-     (.String/equals (.-tagName code) "New")
-     (.GeneratorAdapter/newInstance gen (.-owner code))
+     (.equals (.-tagName code) "InvokeConstructor")
+     (.invokeConstructor gen (.-owner code) (.-method code))
 
-     (.String/equals (.-tagName code) "Bool")
-     (.GeneratorAdapter/push gen (.-boolValue code))
+     (.equals (.-tagName code) "New")
+     (.newInstance gen (.-owner code))
 
-     (.String/equals (.-tagName code) "Int")
-     (.GeneratorAdapter/push gen (.-intValue code))
+     (.equals (.-tagName code) "Bool")
+     (.push gen (.-boolValue code))
 
-     (.String/equals (.-tagName code) "String")
-     (.GeneratorAdapter/push gen ^String (.-stringValue code))
+     (.equals (.-tagName code) "Int")
+     (.push gen (.-intValue code))
 
-     (.String/equals (.-tagName code) "GetField")
-     (.GeneratorAdapter/getField gen (.-owner code) (.-name code) (.-fieldType code))
+     (.equals (.-tagName code) "String")
+     (.push gen ^String (.-stringValue code))
 
-     (.String/equals (.-tagName code) "PutField")
-     (.GeneratorAdapter/putField gen (.-owner code) (.-name code) (.-fieldType code))
+     (.equals (.-tagName code) "Nil")
+     (.visitInsn gen Opcodes/ACONST_NULL)
+     
+     (.equals (.-tagName code) "Dup")
+     (.dup gen)
 
-     (.String/equals (.-tagName code) "Dup")
-     (.GeneratorAdapter/dup gen)
+     (.equals (.-tagName code) "Pop")
+     (.pop gen)
 
-     (.String/equals (.-tagName code) "Pop")
-     (.GeneratorAdapter/pop gen)
-
-     (.String/equals (.-tagName code) "Return")
-     (.GeneratorAdapter/returnValue gen)
+     ;; print
+     
+     (.equals (.-tagName code) "Return")
+     (.returnValue gen)
 
      :else nil))
 
 
  (defn lang.myGenerateCode [gen org.objectweb.asm.commons.GeneratorAdapter void]
    (lang.generateCode/invoke gen (lang.Code/Int 42))
+   (lang.generateCode/invoke gen (lang.Code/Int 2))
+   (lang.generateCode/invoke gen (lang.Code/MultInt))
    (lang.generateCode/invoke gen (lang.Code/Return)))
 
 

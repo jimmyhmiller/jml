@@ -42,27 +42,51 @@
 (defn create-method [{:keys [name arg-types return-type]}]
   (Method. name (symbol->type return-type) (to-type-array arg-types)))
 
-(defn get-method-info-jvm [klass method-name method-args]
-  (let [methods (->> (reflect/reflect klass)
-                     :members
-                     (filter (comp #{(symbol method-name)} :name))
-                     (filter (fn [{:keys [parameter-types]}]
-                               (= (count parameter-types) (count method-args))))
-                     (filter (fn [{:keys [parameter-types]}]
-                               (or (nil? method-args)
-                                   (every? jvm-type-equiv? (map vector parameter-types method-args))))))
-        _ (when-not (= 1 (count methods))
-            (throw (ex-info "Method overloaded. Need to be more or less specific"
-                            {:class (.getName klass)
-                             :method-name method-name
-                             :methods methods
-                             :method-args method-args})))
-        {:keys [return-type parameter-types]} (first methods)]
-    {:return-type return-type
-     :parameter-types parameter-types
-     :method (create-method {:name method-name
-                             :arg-types parameter-types
-                             :return-type return-type})}))
+
+(defn get-methods-jvm [klass method-name method-args ancestors]
+  (->> (reflect/reflect klass :ancestors ancestors)
+       :members
+       (filter (comp #{(symbol method-name)} :name))
+       (filter (fn [{:keys [parameter-types]}]
+                 (= (count parameter-types) (count method-args))))
+       (filter (fn [{:keys [parameter-types]}]
+                 (or (nil? method-args)
+                     (every? jvm-type-equiv? (map vector parameter-types method-args)))))))
+
+
+(defn get-method-info-jvm
+  ([klass method-name method-args]
+   (get-method-info-jvm klass method-name method-args false))
+  ([klass method-name method-args ancestors]
+   (let [methods (get-methods-jvm klass method-name method-args ancestors)
+         methods (if (and (empty? methods) (false? ancestors))
+                   (get-methods-jvm klass method-name method-args true)
+                   methods)
+         _ (when-not (= 1 (count methods))
+             (throw (ex-info "Method overloaded. Need to be more or less specific"
+                             {:class (.getName klass)
+                              :method-name method-name
+                              :methods methods
+                              :method-args method-args})))
+         {:keys [return-type parameter-types]} (first methods)]
+     {:return-type return-type
+      :parameter-types parameter-types
+      :method (create-method {:name method-name
+                              :arg-types parameter-types
+                              :return-type return-type})})))
+
+
+
+(defn get-static-field-type [klass name]
+  (let [fields
+        (->> (reflect/reflect klass :ancestors true)
+             :members
+             (filter (comp #{name} :name)))
+        _ (when-not (= (count fields) 1)
+            (throw (ex-info "Could not find static field"
+                            {:class-name (.getName klass)
+                             :field-name name})))]
+    (:type (first fields))))
 
 
 
@@ -141,9 +165,7 @@
     :invoke-static (if-let [return-type (:return-type (second expr))]
                      return-type
                      (throw (ex-info "Can't synth invoke static" {:expr expr :env env})))
-    :get-static-field (if-let [return-type (:return-type (second expr))]
-                        return-type
-                        (throw (ex-info "Can't synth get static field" {:expr expr :env env})))
+    :get-static-field (get-static-field-type (Class/forName (name (:owner (second expr)))) (symbol (:name (second expr))))
     ;; Fix by looking in env
     :load-local 'java.lang.Object
     := 'boolean
@@ -261,6 +283,16 @@
                                      (assoc :name method-name)
                                      (assoc :method method))]
                                 augmented-args)))))
+
+    :get-static-field (let [[tag attrs & [& args]] expr
+                            owner (symbol (namespace (:name attrs)))
+                            field-type (synth (assoc context :expr (-> expr
+                                                                       (assoc-in [1 :owner] owner)
+                                                                       (assoc-in [1 :name] (name (:name attrs))))))]
+                        (-> expr
+                            (assoc-in [1 :owner] owner)
+                            (assoc-in [1 :field-type] field-type)
+                            (assoc-in [1 :name] (name (:name attrs)))))
     :do (do
           (let [result
                 (into [(first expr) (second expr)]
