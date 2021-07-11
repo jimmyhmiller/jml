@@ -469,7 +469,18 @@
      (.pop gen)
 
      ;; print
-     
+     (.equals (.-tagName code) "Print")
+     (do
+       (.dup gen)
+       ;; Arguably it's a little hacky, but since those are std jvm types I doubt there will be name conflicts
+       (.getStatic gen
+                   (Type/getType "Ljava/lang/System;")
+                   "out"
+                   (Type/getType "Ljava/io/PrintStream;"))
+       (.swap gen)
+       (.invokeVirtual gen
+                       (Type/getType "Ljava/io/PrintStream;")
+                       (org.objectweb.asm.commons.Method/getMethod "void println(int)")))
      (.equals (.-tagName code) "Return")
      (.returnValue gen)
 
@@ -479,7 +490,9 @@
  (defn lang.myGenerateCode [gen org.objectweb.asm.commons.GeneratorAdapter void]
    (lang.generateCode/invoke gen (lang.Code/Int 42))
    (lang.generateCode/invoke gen (lang.Code/Int 2))
+   (lang.generateCode/invoke gen (lang.Code/Print))
    (lang.generateCode/invoke gen (lang.Code/MultInt))
+   (lang.generateCode/invoke gen (lang.Code/Print))
    (lang.generateCode/invoke gen (lang.Code/Return)))
 
 
