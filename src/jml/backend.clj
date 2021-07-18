@@ -46,7 +46,9 @@
       :invoke-constructor
       (.invokeConstructor gen (:owner code) (:method code))
       :new
-      (.newInstance gen (:owner code))
+      (do
+        (.newInstance gen (:owner code))
+        (.dup gen))
       :bool
       ;; Should assert bool?
       (.push gen (boolean (:value code)))

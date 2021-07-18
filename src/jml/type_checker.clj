@@ -23,7 +23,11 @@
     int Type/INT_TYPE
     long Type/LONG_TYPE
     boolean Type/BOOLEAN_TYPE
-    (Type/getType ^Class (Class/forName (name sym)))))
+    (if (string/includes? (name sym) "<>")
+      (Type/getType (format "[L%s;"  (string/replace
+                                     (string/replace  (name sym) "<>" "")
+                                     "." "/")))
+      (Type/getType ^Class  (Class/forName (name sym))))))
 
 (defn to-type-array [syms]
   (into-array Type (map symbol->type syms)))
@@ -68,12 +72,14 @@
                               :method-name method-name
                               :methods methods
                               :method-args method-args})))
-         {:keys [return-type parameter-types]} (first methods)]
+         {:keys [return-type parameter-types declaring-class]} (first methods)
+         is-ctor? (not return-type)
+         return-type (or return-type declaring-class)]
      {:return-type return-type
       :parameter-types parameter-types
-      :method (create-method {:name method-name
+      :method (create-method {:name (if is-ctor? "<init>"  method-name)
                               :arg-types parameter-types
-                              :return-type return-type})})))
+                              :return-type (if is-ctor? 'void return-type)})})))
 
 
 
@@ -106,12 +112,13 @@
     :int (matches-type 'int context)
     :bool (matches-type 'boolean context)
     :string (matches-type 'java.lang.String context)
+    :new (matches-type (:owner (second expr)) context)
     :mult-int (do
                 ;; TODO: Do we know the type of the subexpressions here?
                 (matches-type (augment-then-synth (assoc context :expr (nth expr 2)))
                               (assoc context :expr (nth expr 2)))
                 (matches-type (augment-then-synth (assoc context :expr (nth expr 3)))
-                              (assoc context :expr (nth expr 3))) 
+                              (assoc context :expr (nth expr 3)))
                 (matches-type 'int context))
     :sub-int (do
                ;; TODO: Do we know the type of the subexpressions here?
@@ -138,7 +145,14 @@
                       (check (assoc context :expr (nth expr 2) :type (:owner (second expr))))
                       (doseq [[type expr] (map vector (:arg-types (second expr)) (rest (rest (rest expr))))]
                         (check (assoc context :expr expr :type type))))
+    :invoke-constructor (do
+                          (matches-type (:owner (second expr)) context)
+                          (check (assoc context :expr (nth expr 2) :type (:owner (second expr))))
+                          (doseq [[type expr] (map vector (:arg-types (second expr)) (rest (rest expr)))]
+                            (check (assoc context :expr expr :type type))))
+
     :get-field (matches-type (:field-type (second expr)) context)
+    :get-static-field (matches-type (:field-type (second expr)) context)
     :do (matches-type (augment-then-synth (assoc context :expr (last expr))) context)
     :nil (matches-type 'void context)
     :pop (matches-type 'void context)
@@ -156,6 +170,7 @@
     :string 'java.lang.String
     :sub-int 'int
     :mult-int 'int
+    :new (:owner (second expr))
     :arg (get-in env [:arg-types (:value (second expr))])
     :get-field (get-field-type (:owner (second expr)) (:name (second expr)) env)
     :invoke-virtual (if-let [return-type (:return-type (second expr))]
@@ -165,6 +180,7 @@
     :invoke-static (if-let [return-type (:return-type (second expr))]
                      return-type
                      (throw (ex-info "Can't synth invoke static" {:expr expr :env env})))
+    :invoke-constructor (:owner (second expr))
     :get-static-field (get-static-field-type (Class/forName (name (:owner (second expr)))) (symbol (:name (second expr))))
     ;; Fix by looking in env
     :load-local 'java.lang.Object
@@ -283,6 +299,31 @@
                                      (assoc :name method-name)
                                      (assoc :method method))]
                                 augmented-args)))))
+    :invoke-constructor (let [[tag attrs & [& args]] expr]
+                          ;; We already augmented
+                          (if (:return-type attrs)
+                            expr
+                            (let [this  (:owner attrs)
+                                  method-name (name this)
+                                  this-type this
+                                  augmented-args (mapv #(augment (assoc context :expr %))  args)
+                                  arg-types (mapv #(synth (assoc context :expr %)) augmented-args)
+                                  {:keys [method return-type]} (get-method-info context
+                                                                                this
+                                                                                method-name
+                                                                                (rest args))]
+                              (wrap-void-types
+                               (into [tag
+                                      (-> attrs
+                                          (assoc :owner this-type)
+                                          ;; Should we do parameters from reflect?
+                                          ;; Not sure
+                                          ;; Could be object instead of string for example
+                                          (assoc :arg-types arg-types)
+                                          (assoc :return-type return-type)
+                                          (assoc :name method-name)
+                                          (assoc :method method))]
+                                     augmented-args)))))
 
     :get-static-field (let [[tag attrs & [& args]] expr
                             owner (symbol (namespace (:name attrs)))

@@ -18,6 +18,8 @@
       ;; if expr is already of asm.Type
       (= t Type)
       expr-type
+      (and (symbol? expr-type) (= "Array" (namespace expr-type)))
+      (Type/getType (format "[L%s;" (string/replace (name expr-type) "." "/")))
 
       (or (symbol? expr-type) (keyword? expr-type) (string? expr-type))
       (case (symbol expr-type)
@@ -192,8 +194,12 @@
                (de-sexpr (expand-cond x))
                (and (seq? x) (symbol? (first x)) (= (first x) 'do))
                (into [:do] (interpose [:pop] (rest x)))
+               (and (seq? x) (symbol? (first x)) (string/ends-with? (name (first x)) ".")) ;; constructor dot syntax
+               (into [:invoke-constructor {:owner (symbol  (subs (name (first x)) 0 (dec (count (name (first  x))))))}]
+                     (concat [[:new {:owner (symbol (subs (name (first x)) 0 (dec (count (name (first x))))))}]]
+                             (rest x)))
                (and (seq? x) (symbol? (first x)) (string/starts-with? (name (first x)) ".-"))
-               (into [:get-field {:name (subs (name (first x)) 2)}] (rest x)) 
+               (into [:get-field {:name (subs (name (first x)) 2)}] (rest x))
                (and (seq? x) (symbol? (first x)) (string/starts-with? (full-symbol-name (first x)) "."))
                (into [:invoke-virtual {:name (first x)}] (rest x))
                (and (seq? x) (symbol? (first x)) (string/includes? (full-symbol-name (first x)) "/"))
@@ -360,12 +366,59 @@
 (defmacro jml [& s-exprs]
   (run-multiple* s-exprs))
 
+
+(jml
+ (defn lang.invokeConstructorExample [java.lang.Integer]
+   (java.lang.Integer. 2)))
+
+(jml
+ (defalias Type org.objectweb.asm.Type)
+ (defalias Class java.lang.Class)
+
+ (defn lang.createArray [void]
+   (let [arg-types (java.lang.reflect.Array/newInstance
+                    (Class/forName "org.objectweb.asm.Type") 1) Array/org.objectweb.asm.Type]
+     (java.lang.reflect.Array/set arg-types 0 Type/INT_TYPE))
+   nil))
+
+(comment
+  (jml
+   (defalias GeneratorAdapter org.objectweb.asm.commons.GeneratorAdapter)
+   (defalias Type org.objectweb.asm.Type)
+   (defalias Opcodes org.objectweb.asm.Opcodes)
+   (defalias Class java.lang.Class)
+
+   (defn lang.printCode [gen org.objectweb.asm.commons.GeneratorAdapter void]
+
+     (.dup gen)
+     (.getStatic gen
+                 (Type/getType (java.lang.Class/forName "java.lang.System"))
+                 "out"
+                 (Type/getType  (.getType (.getDeclaredField (java.lang.Class/forName "java.lang.System")
+                                                             "out"))))
+     (.swap gen)
+     (.invokeVirtual gen (Type/getType
+                          (.getType (.getDeclaredField (Class/forName "java.lang.System")
+                                                       "out")))
+                     (let [arg-types (java.lang.reflect.Array/newInstance
+                                      (Class/forName "org.objectweb.asm.Type") 1) Array/org.objectweb.asm.Type]
+                       (java.lang.reflect.Array/set arg-types 0 Type/INT_TYPE)
+                       (org.objectweb.asm.commons.Method. "println" Type/VOID_TYPE arg-types)))))
+
+  ;;  org/objectweb/asm/commons/Method.<init>:(Ljava/lang/String;Lorg/objectweb/asm/Type;[Lorg/objectweb/asm/Type;)V
+  ;;(Ljava/lang/String;Lorg/objectweb/asm/Type;[Lorg.objectweb.asm.Type)V"
+  (backend/make-fn-with-callback
+   "lang2.MyAwesomeCode"
+   #(lang.printCode/invoke %)))
+
+
 (jml
 
 
  (defalias GeneratorAdapter org.objectweb.asm.commons.GeneratorAdapter)
  (defalias Type org.objectweb.asm.Type)
  (defalias Opcodes org.objectweb.asm.Opcodes)
+ (defalias Class java.lang.Class)
 
  (defenum lang.Code
    MultInt
@@ -448,7 +501,9 @@
      (.invokeConstructor gen (.-owner code) (.-method code))
 
      (.equals (.-tagName code) "New")
-     (.newInstance gen (.-owner code))
+     (do
+       (.newInstance gen (.-owner code))
+       (.dup gen))
 
      (.equals (.-tagName code) "Bool")
      (.push gen (.-boolValue code))
