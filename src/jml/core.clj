@@ -198,11 +198,11 @@
                (and (seq? x) (symbol? (first x)) (= (first x) 'do))
                (into [:do] (interpose [:pop] (rest x)))
                (and (seq? x) (symbol? (first x)) (= (first x) 'array-store))
-               (into [:array-store {:owner (second x)}] (rest (rest x)))
+               (into [:array-store {}]  (rest x))
                (and (seq? x) (symbol? (first x)) (= (first x) 'new-array))
                (into [:new-array {:owner (second x)}] (rest (rest x)))
                (and (seq? x) (symbol? (first x)) (= (first x) 'array-load))
-               (into [:array-load {:owner (second x)}] (rest (rest x)))
+               (into [:array-load {}]  (rest x))
                (and (seq? x) (symbol? (first x)) (string/ends-with? (name (first x)) ".")) ;; constructor dot syntax
                (into [:invoke-constructor {:owner (symbol  (subs (name (first x)) 0 (dec (count (name (first  x))))))}]
                      (concat [[:new {:owner (symbol (subs (name (first x)) 0 (dec (count (name (first x))))))}]]
@@ -295,7 +295,6 @@
               (map (fn [[_ props & _]]
                      [(:name props) (:local-type props)]))
               (into {}))))
-
 
 
 (defn process-defn-for-types [[_ fn-name types & body] env]
@@ -397,9 +396,9 @@
  (defn lang.createArray [i int Array/int]
    (let [a (new-array int 2) Array/int
          b 2 int]
-     (array-store int a  0 i)
-     (array-store int a  1 (mult-int i 2))
-     (array-load  int a  0)
+     (array-store  a  0 i)
+     (array-store  a  1 (mult-int i 2))
+     (array-load   a  0)
      a)))
 
 (lang.createArray/invoke 23)
@@ -425,7 +424,7 @@
                         (.getType (.getDeclaredField (Class/forName "java.lang.System")
                                                      "out")))
                    (let [arg-types (new-array org.objectweb.asm.Type 1) Array/org.objectweb.asm.Type]
-                     (array-store org.objectweb.asm.Type arg-types 0 Type/INT_TYPE)
+                     (array-store arg-types 0 Type/INT_TYPE)
                      (org.objectweb.asm.commons.Method. "println" Type/VOID_TYPE arg-types)))
    (.returnValue gen)))
 
@@ -563,7 +562,7 @@
                             (.getType (.getDeclaredField (Class/forName "java.lang.System")
                                                          "out")))
                        (let [arg-types (new-array org.objectweb.asm.Type 1) Array/org.objectweb.asm.Type]
-                         (array-store org.objectweb.asm.Type arg-types 0 Type/INT_TYPE)
+                         (array-store arg-types 0 Type/INT_TYPE)
                          (org.objectweb.asm.commons.Method. "println" Type/VOID_TYPE arg-types))))
      (.equals (.-tagName code) "Return")
      (.returnValue gen)

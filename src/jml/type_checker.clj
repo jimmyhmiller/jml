@@ -130,9 +130,9 @@
                    (matches-type 'void context))
     :array-load (do  ;; check if the first argument's type if Array of right type (:owner (second expr))
                   (matches-type (synth (assoc context :expr (nth expr 2)))
-                                  (assoc context :type
-                                         (symbol "Array"
-                                                 (name  (:owner (second expr))))))
+                                (assoc context :type
+                                       (symbol "Array"
+                                               (name  (:owner (second expr))))))
                   (matches-type (:owner (second expr)) context))
     :mult-int (do
                 ;; TODO: Do we know the type of the subexpressions here?
@@ -260,14 +260,35 @@
     [:do expr [:nil]]
     expr))
 
-
-
 (defn augment [{:keys [expr env type] :as context}]
 
   (when (and type (not= (first expr) :do))
     (check context))
 
   (case (first expr)
+    :array-store (let [[_ attrs arr idx val] expr
+                       item-type (synth (assoc context :expr arr))]
+                   (into [:array-store {:owner (symbol (name item-type))}]
+                         ;; TODO we should really make it simpler to augment over sub-exprs, extract an augment-single-expr perhaps ?
+                         (mapv (fn [expr]
+                                 (let [result
+                                       (augment (assoc (dissoc context :type) :expr expr))]
+                                   (check {:expr result
+                                           :env env
+                                           :type (synth {:expr result :env env})})
+                                   result))
+                               (rest (rest expr)))))
+    :array-load  (let [[_ attrs arr idx] expr
+                       item-type (synth (assoc context :expr arr))]
+                   (into [:array-load {:owner (symbol (name item-type))}]
+                         (mapv (fn [expr]
+                                 (let [result
+                                       (augment (assoc (dissoc context :type) :expr expr))]
+                                   (check {:expr result
+                                           :env env
+                                           :type (synth {:expr result :env env})})
+                                   result))
+                               (rest (rest expr)))))
     :get-field (let [[_ attrs child] expr]
                  (let [child-type (synth (assoc context :expr child))
                        field-type (synth (assoc context :expr (assoc-in expr [1 :owner] child-type)))]
@@ -307,7 +328,7 @@
                              method-name (name (:name attrs))
                              this-type this
                              augmented-args (mapv #(augment (assoc context :expr %)) args)
-                             arg-types (mapv #(synth (assoc context :expr %)) augmented-args)
+                             arg-types      (mapv #(synth (assoc context :expr %)) augmented-args)
                              {:keys [method return-type]} (get-method-info context
                                                                            this
                                                                            method-name
