@@ -395,11 +395,14 @@
  (defalias Class java.lang.Class)
 
  (defn lang.createArray [i int Array/int]
-   (let [a (new-array int 2) Array/int]
+   (let [a (new-array int 2) Array/int
+         b 2 int]
      (array-store int a  0 i)
      (array-store int a  1 (mult-int i 2))
-     (array-load  int a 0)
+     (array-load  int a  0)
      a)))
+
+(lang.createArray/invoke 23)
 
 ;;
 (jml
@@ -550,15 +553,18 @@
      (.equals (.-tagName code) "Print")
      (do
        (.dup gen)
-       ;; Arguably it's a little hacky, but since those are std jvm types I doubt there will be name conflicts
        (.getStatic gen
-                   (Type/getType "Ljava/lang/System;")
+                   (Type/getType (java.lang.Class/forName "java.lang.System"))
                    "out"
-                   (Type/getType "Ljava/io/PrintStream;"))
+                   (Type/getType  (.getType (.getDeclaredField (java.lang.Class/forName "java.lang.System")
+                                                               "out"))))
        (.swap gen)
-       (.invokeVirtual gen
-                       (Type/getType "Ljava/io/PrintStream;")
-                       (org.objectweb.asm.commons.Method/getMethod "void println(int)")))
+       (.invokeVirtual gen (Type/getType
+                            (.getType (.getDeclaredField (Class/forName "java.lang.System")
+                                                         "out")))
+                       (let [arg-types (new-array org.objectweb.asm.Type 1) Array/org.objectweb.asm.Type]
+                         (array-store org.objectweb.asm.Type arg-types 0 Type/INT_TYPE)
+                         (org.objectweb.asm.commons.Method. "println" Type/VOID_TYPE arg-types))))
      (.equals (.-tagName code) "Return")
      (.returnValue gen)
 
@@ -567,7 +573,7 @@
 
  (defn lang.myGenerateCode [gen org.objectweb.asm.commons.GeneratorAdapter void]
    (lang.generateCode/invoke gen (lang.Code/Int 42))
-   (lang.generateCode/invoke gen (lang.Code/Int 2))
+   (lang.generateCode/invoke gen (lang.Code/Int 4))
    (lang.generateCode/invoke gen (lang.Code/Print))
    (lang.generateCode/invoke gen (lang.Code/MultInt))
    (lang.generateCode/invoke gen (lang.Code/Print))

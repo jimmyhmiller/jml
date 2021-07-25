@@ -122,8 +122,18 @@
     :dup (matches-type 'void context)
     :new (matches-type (:owner (second expr)) context)
     :new-array (matches-type (synth context) context)
-    :array-store (matches-type 'void context)
-    :array-load (matches-type (:owner (second expr)) context)
+    :array-store (do ;; check if the first argument's type if Array of right type (:owner (second expr))
+                   (matches-type (synth (assoc context :expr (nth expr 2)))
+                                 (assoc context :type
+                                        (symbol "Array"
+                                                (name  (:owner (second expr))))))
+                   (matches-type 'void context))
+    :array-load (do  ;; check if the first argument's type if Array of right type (:owner (second expr))
+                  (matches-type (synth (assoc context :expr (nth expr 2)))
+                                  (assoc context :type
+                                         (symbol "Array"
+                                                 (name  (:owner (second expr))))))
+                  (matches-type (:owner (second expr)) context))
     :mult-int (do
                 ;; TODO: Do we know the type of the subexpressions here?
                 (matches-type (augment-then-synth (assoc context :expr (nth expr 2)))
