@@ -260,6 +260,15 @@
     [:do expr [:nil]]
     expr))
 
+(defn augment-sub-expr [{:keys [expr env type] :as parent-context}]
+  (fn [expr]
+    (let [result
+          (augment (assoc (dissoc parent-context :type) :expr expr))]
+      (check {:expr result
+              :env env
+              :type (synth {:expr result :env env})})
+      result)))
+
 (defn augment [{:keys [expr env type] :as context}]
 
   (when (and type (not= (first expr) :do))
@@ -269,26 +278,11 @@
     :array-store (let [[_ attrs arr idx val] expr
                        item-type (synth (assoc context :expr arr))]
                    (into [:array-store {:owner (symbol (name item-type))}]
-                         ;; TODO we should really make it simpler to augment over sub-exprs, extract an augment-single-expr perhaps ?
-                         (mapv (fn [expr]
-                                 (let [result
-                                       (augment (assoc (dissoc context :type) :expr expr))]
-                                   (check {:expr result
-                                           :env env
-                                           :type (synth {:expr result :env env})})
-                                   result))
-                               (rest (rest expr)))))
+                         (mapv (augment-sub-expr context) [arr idx val])))
     :array-load  (let [[_ attrs arr idx] expr
                        item-type (synth (assoc context :expr arr))]
                    (into [:array-load {:owner (symbol (name item-type))}]
-                         (mapv (fn [expr]
-                                 (let [result
-                                       (augment (assoc (dissoc context :type) :expr expr))]
-                                   (check {:expr result
-                                           :env env
-                                           :type (synth {:expr result :env env})})
-                                   result))
-                               (rest (rest expr)))))
+                         (mapv (augment-sub-expr context) [arr idx])))
     :get-field (let [[_ attrs child] expr]
                  (let [child-type (synth (assoc context :expr child))
                        field-type (synth (assoc context :expr (assoc-in expr [1 :owner] child-type)))]
@@ -384,12 +378,7 @@
           (let [result
                 (into [(first expr) (second expr)]
                       ;; Need to reduce?
-                      (mapv (fn [expr] (let [result
-                                             (augment (assoc (dissoc context :type) :expr expr))]
-                                         (check {:expr result
-                                                 :env env
-                                                 :type (synth {:expr result :env env})})
-                                         result))
+                      (mapv (augment-sub-expr context)
                             (rest (rest expr))))]
 
             (when type
@@ -401,26 +390,13 @@
                                                      :env env
                                                      :type 'boolean})
                                              result)]
-               (mapv (fn [expr] (let [result
-                                      (augment (assoc (dissoc context :type) :expr expr))]
-                                  (check {:expr result
-                                          :env env
-                                          :type (synth {:expr result :env env})})
-                                  result))
+               (mapv (augment-sub-expr context)
                      (rest (rest (rest expr)))))
     :pop [:pop]
 
-
-
     (do
       (into [(first expr) (second expr)]
-            (mapv (fn [expr]
-                    (let [result
-                          (augment (assoc (dissoc context :type) :expr expr))]
-                      (check {:expr result
-                              :env env
-                              :type (synth {:expr result :env env})})
-                      result))
+            (mapv (augment-sub-expr context)
                   (rest (rest expr)))))))
 
 
