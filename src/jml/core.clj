@@ -19,7 +19,10 @@
       (= t Type)
       expr-type
       (and (symbol? expr-type) (= "Array" (namespace expr-type)))
-      (Type/getType (format "[L%s;" (string/replace (name expr-type) "." "/")))
+      (case (name expr-type)
+        "int" (Type/getType "[I")
+        ;; TODO add other primitive types
+        (Type/getType (format "[L%s;" (string/replace (name expr-type) "." "/"))))
 
       (or (symbol? expr-type) (keyword? expr-type) (string? expr-type))
       (case (symbol expr-type)
@@ -163,10 +166,10 @@
 
 
 (defn de-sexpr [expr]
-  
+
   (walk/postwalk
    (fn [x]
-     
+
      (cond
        (and (vector? x)
             (not (map-entry? x))
@@ -194,6 +197,12 @@
                (de-sexpr (expand-cond x))
                (and (seq? x) (symbol? (first x)) (= (first x) 'do))
                (into [:do] (interpose [:pop] (rest x)))
+               (and (seq? x) (symbol? (first x)) (= (first x) 'array-store))
+               (into [:array-store {:owner (second x)}] (rest (rest x)))
+               (and (seq? x) (symbol? (first x)) (= (first x) 'new-array))
+               (into [:new-array {:owner (second x)}] (rest (rest x)))
+               (and (seq? x) (symbol? (first x)) (= (first x) 'array-load))
+               (into [:array-load {:owner (second x)}] (rest (rest x)))
                (and (seq? x) (symbol? (first x)) (string/ends-with? (name (first x)) ".")) ;; constructor dot syntax
                (into [:invoke-constructor {:owner (symbol  (subs (name (first x)) 0 (dec (count (name (first  x))))))}]
                      (concat [[:new {:owner (symbol (subs (name (first x)) 0 (dec (count (name (first x))))))}]]
@@ -279,9 +288,17 @@
 
 
 
+(defn enrich-env-with-local-types [expr env]
+  (assoc env :local-types
+         (->> (tree-seq vector? #(into [] (rest (rest %))) expr)
+              (filter #(= :store-local (first %)))
+              (map (fn [[_ props & _]]
+                     [(:name props) (:local-type props)]))
+              (into {}))))
+
+
 
 (defn process-defn-for-types [[_ fn-name types & body] env]
-
   (let [arg-names (mapv first (partition 2 (butlast types)))
         arg-types (mapv second (partition 2 (butlast types)))
         env (assoc-in env
@@ -289,13 +306,15 @@
                       {:type :fn
                        :class-name (string/replace (name fn-name) "." "/")
                        :arg-types arg-types
-                       :return-type (last types)})]
+                       :return-type (last types)})
+        expr (-> (cons 'do body)
+                 replace-let-exprs
+                 (replace-args arg-names)
+                 (replace-aliases (:aliases env))
+                 de-sexpr)
+        env (enrich-env-with-local-types expr env)]
     (assoc-in env [:functions fn-name :code]
-              (time (type-checker/augment {:expr (-> (cons 'do body)
-                                                     replace-let-exprs
-                                                     (replace-args arg-names)
-                                                     (replace-aliases (:aliases env))
-                                                     de-sexpr)
+              (time (type-checker/augment {:expr expr
                                            :env (assoc env :arg-types arg-types)
                                            :type (last types)})))))
 
@@ -375,42 +394,46 @@
  (defalias Type org.objectweb.asm.Type)
  (defalias Class java.lang.Class)
 
- (defn lang.createArray [void]
-   (let [arg-types (java.lang.reflect.Array/newInstance
-                    (Class/forName "org.objectweb.asm.Type") 1) Array/org.objectweb.asm.Type]
-     (java.lang.reflect.Array/set arg-types 0 Type/INT_TYPE))
-   nil))
+ (defn lang.createArray [i int Array/int]
+   (let [a (new-array int 2) Array/int]
+     (array-store int a  0 i)
+     (array-store int a  1 (mult-int i 2))
+     (array-load  int a 0)
+     a)))
 
-(comment
-  (jml
-   (defalias GeneratorAdapter org.objectweb.asm.commons.GeneratorAdapter)
-   (defalias Type org.objectweb.asm.Type)
-   (defalias Opcodes org.objectweb.asm.Opcodes)
-   (defalias Class java.lang.Class)
+;;
+(jml
+ (defalias GeneratorAdapter org.objectweb.asm.commons.GeneratorAdapter)
+ (defalias Type org.objectweb.asm.Type)
+ (defalias Opcodes org.objectweb.asm.Opcodes)
+ (defalias Class java.lang.Class)
 
-   (defn lang.printCode [gen org.objectweb.asm.commons.GeneratorAdapter void]
+ (defn lang.printCode [gen org.objectweb.asm.commons.GeneratorAdapter void]
+   (.push gen 42)
 
-     (.dup gen)
-     (.getStatic gen
-                 (Type/getType (java.lang.Class/forName "java.lang.System"))
-                 "out"
-                 (Type/getType  (.getType (.getDeclaredField (java.lang.Class/forName "java.lang.System")
-                                                             "out"))))
-     (.swap gen)
-     (.invokeVirtual gen (Type/getType
-                          (.getType (.getDeclaredField (Class/forName "java.lang.System")
-                                                       "out")))
-                     (let [arg-types (java.lang.reflect.Array/newInstance
-                                      (Class/forName "org.objectweb.asm.Type") 1) Array/org.objectweb.asm.Type]
-                       (java.lang.reflect.Array/set arg-types 0 Type/INT_TYPE)
-                       (org.objectweb.asm.commons.Method. "println" Type/VOID_TYPE arg-types)))))
+   (.dup gen)
+   (.getStatic gen
+               (Type/getType (java.lang.Class/forName "java.lang.System"))
+               "out"
+               (Type/getType  (.getType (.getDeclaredField (java.lang.Class/forName "java.lang.System")
+                                                           "out"))))
+   (.swap gen)
+   (.invokeVirtual gen (Type/getType
+                        (.getType (.getDeclaredField (Class/forName "java.lang.System")
+                                                     "out")))
+                   (let [arg-types (new-array org.objectweb.asm.Type 1) Array/org.objectweb.asm.Type]
+                     (array-store org.objectweb.asm.Type arg-types 0 Type/INT_TYPE)
+                     (org.objectweb.asm.commons.Method. "println" Type/VOID_TYPE arg-types)))
+   (.returnValue gen)))
 
-  ;;  org/objectweb/asm/commons/Method.<init>:(Ljava/lang/String;Lorg/objectweb/asm/Type;[Lorg/objectweb/asm/Type;)V
-  ;;(Ljava/lang/String;Lorg/objectweb/asm/Type;[Lorg.objectweb.asm.Type)V"
-  (backend/make-fn-with-callback
-   "lang2.MyAwesomeCode"
-   #(lang.printCode/invoke %)))
+;;  org/objectweb/asm/commons/Method.<init>:(Ljava/lang/String;Lorg/objectweb/asm/Type;[Lorg/objectweb/asm/Type;)V
+;;(Ljava/lang/String;Lorg/objectweb/asm/Type;[Lorg.objectweb.asm.Type)V"
+(backend/make-fn-with-callback
+ "lang2.MyAwesomeCode"
+ #(lang.printCode/invoke %))
 
+
+(lang2.MyAwesomeCode/invoke)
 
 (jml
 
@@ -475,13 +498,13 @@
 
      (.equals (.-tagName code) "SubInt")
      (lang.generateCode/invoke gen (lang.Code/Math GeneratorAdapter/SUB Type/INT_TYPE))
-     
+
      (.String/equals (.-tagName code) "Arg")
      (.loadArg gen  (.-argIndex code))
 
      (.equals (.-tagName code) "Math")
      (.math gen (.-op code) (.-opType code))
-     
+
      (.equals (.-tagName code) "GetField")
      (.getField gen (.-owner code) (.-name code) (.-fieldType code))
 
@@ -516,7 +539,7 @@
 
      (.equals (.-tagName code) "Nil")
      (.visitInsn gen Opcodes/ACONST_NULL)
-     
+
      (.equals (.-tagName code) "Dup")
      (.dup gen)
 
@@ -613,10 +636,3 @@
 
 
   )
-
-
-
-
-
-
-

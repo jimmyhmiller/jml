@@ -33,10 +33,17 @@
   (into-array Type (map symbol->type syms)))
 
 
+(defn array-type-equiv? [target actual]
+  (and (string/includes? (name actual) "<>")
+       (= (namespace target) "Array")
+       (= (str (name target) "<>")
+          (name actual))))
+
 
 (defn jvm-type-equiv? [[target actual]]
   ;; Checking primatives and subclassing relation
   (or (= target actual)
+      (array-type-equiv?  actual target)
       ;; Ugly hack to autocase
       (= actual 'java.lang.Object)
       (try
@@ -112,7 +119,11 @@
     :int (matches-type 'int context)
     :bool (matches-type 'boolean context)
     :string (matches-type 'java.lang.String context)
+    :dup (matches-type 'void context)
     :new (matches-type (:owner (second expr)) context)
+    :new-array (matches-type (synth context) context)
+    :array-store (matches-type 'void context)
+    :array-load (matches-type (:owner (second expr)) context)
     :mult-int (do
                 ;; TODO: Do we know the type of the subexpressions here?
                 (matches-type (augment-then-synth (assoc context :expr (nth expr 2)))
@@ -158,7 +169,7 @@
     :pop (matches-type 'void context)
     ;; Need to actually be augmenting env
     :store-local (matches-type 'void context)
-    :load-local env
+    :load-local (matches-type (synth context) context)
     (throw (ex-info "No matching check" {:expr expr :type type :env env}))))
 
 
@@ -171,6 +182,10 @@
     :sub-int 'int
     :mult-int 'int
     :new (:owner (second expr))
+    :dup 'void
+    :new-array (symbol "Array" (name (:owner (second expr))))
+    :array-store 'void
+    :array-load  (:owner (second expr))
     :arg (get-in env [:arg-types (:value (second expr))])
     :get-field (get-field-type (:owner (second expr)) (:name (second expr)) env)
     :invoke-virtual (if-let [return-type (:return-type (second expr))]
@@ -183,7 +198,7 @@
     :invoke-constructor (:owner (second expr))
     :get-static-field (get-static-field-type (Class/forName (name (:owner (second expr)))) (symbol (:name (second expr))))
     ;; Fix by looking in env
-    :load-local 'java.lang.Object
+    :load-local (get-in env [:local-types  (:name (second expr))])
     := 'boolean
     :do (augment-then-synth {:expr (last expr) :env env})
     :nil 'void
@@ -364,7 +379,7 @@
                      (rest (rest (rest expr)))))
     :pop [:pop]
 
-    
+
 
     (do
       (into [(first expr) (second expr)]
@@ -460,5 +475,5 @@
             :env '{:arg-types [org.objectweb.asm.commons.GeneratorAdapter lang.Code java.util.Map]
                    :data-types {lang.Code {"stringValue" java.lang.String}}}})
 
-  
+
   )

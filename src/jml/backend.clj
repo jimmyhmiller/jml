@@ -13,11 +13,15 @@
 
 (def INIT (Method/getMethod "void <init>()"))
 
-
 (defn generate-code! [^GeneratorAdapter gen command ]
   (let [code (second command)]
     (case (first command)
-
+      :new-array     (.newArray gen (:owner code))
+      :array-load    (.arrayLoad gen (:owner code))
+      :array-store   (do
+                       (.arrayStore gen (:owner code))
+                       (.visitInsn gen org.objectweb.asm.Opcodes/ACONST_NULL) ;; add nil so that we can pop from interpose, same as we do for :store-local
+                       )
       :mult-int (.math gen GeneratorAdapter/MUL Type/INT_TYPE)
 
       :plus-int
