@@ -78,7 +78,11 @@
                              {:class (.getName klass)
                               :method-name method-name
                               :methods methods
-                              :method-args method-args})))
+                              :method-args method-args
+                              :available-methods
+                              (->> (reflect/reflect klass :ancestors ancestors)
+                                   :members
+                                  (filter (comp #{(symbol method-name)} :name)))})))
          {:keys [return-type parameter-types declaring-class]} (first methods)
          is-ctor? (not return-type)
          return-type (or return-type declaring-class)]
@@ -134,6 +138,15 @@
                                        (symbol "Array"
                                                (name  (:owner (second expr))))))
                   (matches-type (:owner (second expr)) context))
+
+    :plus-int (do
+                ;; TODO: Do we know the type of the subexpressions here?
+                (matches-type (augment-then-synth (assoc context :expr (nth expr 2)))
+                              (assoc context :expr (nth expr 2)))
+                (matches-type (augment-then-synth (assoc context :expr (nth expr 3)))
+                              (assoc context :expr (nth expr 3)))
+                (matches-type 'int context))
+
     :mult-int (do
                 ;; TODO: Do we know the type of the subexpressions here?
                 (matches-type (augment-then-synth (assoc context :expr (nth expr 2)))
@@ -191,6 +204,7 @@
     :string 'java.lang.String
     :sub-int 'int
     :mult-int 'int
+    :plus-int 'int
     :new (:owner (second expr))
     :dup 'void
     :new-array (symbol "Array" (name (:owner (second expr))))
@@ -234,6 +248,7 @@
     (let [augmented-args (mapv #(augment (assoc context :expr %)) args)
           arg-types (mapv #(synth (assoc context :expr %)) augmented-args)]
       (try
+
         (get-method-info-jvm (Class/forName (name owner-name))
                              method-name
                              arg-types)
@@ -365,15 +380,17 @@
                                           (assoc :method method))]
                                      augmented-args)))))
 
-    :get-static-field (let [[tag attrs & [& args]] expr
-                            owner (symbol (namespace (:name attrs)))
-                            field-type (synth (assoc context :expr (-> expr
-                                                                       (assoc-in [1 :owner] owner)
-                                                                       (assoc-in [1 :name] (name (:name attrs))))))]
-                        (-> expr
-                            (assoc-in [1 :owner] owner)
-                            (assoc-in [1 :field-type] field-type)
-                            (assoc-in [1 :name] (name (:name attrs)))))
+    :get-static-field (let [[tag attrs & [& args]] expr]
+                        (if (:owner attrs)
+                          expr
+                          (let [owner (symbol (namespace (:name attrs)))
+                                field-type (synth (assoc context :expr (-> expr
+                                                                           (assoc-in [1 :owner] owner)
+                                                                           (assoc-in [1 :name] (name (:name attrs))))))]
+                            (-> expr
+                                (assoc-in [1 :owner] owner)
+                                (assoc-in [1 :field-type] field-type)
+                                (assoc-in [1 :name] (name (:name attrs)))))))
     :do (do
           (let [result
                 (into [(first expr) (second expr)]

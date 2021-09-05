@@ -13,6 +13,9 @@
 
 (def INIT (Method/getMethod "void <init>()"))
 
+(defn symbol->type [sym]
+  (Type/getType (Class/forName (name sym))))
+
 (defn generate-code! [^GeneratorAdapter gen command ]
   (let [code (second command)]
     (case (first command)
@@ -42,7 +45,10 @@
       :put-field
       (.putField gen (:owner code) (:name code) (:field-type code))
       :get-static-field
-      (.getStatic gen (:owner code) (:name code) (:field-type code))
+      (try
+        (.getStatic gen (:owner code) (:name code) (:field-type code))
+        (catch Exception e
+          (throw (ex-info "Error" {:code code} e))))
       :invoke-static
       (.invokeStatic gen (:owner code) (:method code))
       :invoke-virtual

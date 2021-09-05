@@ -143,6 +143,7 @@
 (defn desugar-let [[_ bindings & body]]
   (when-not (zero? (mod (count bindings) 3))
     (throw (ex-info "Invalid bindings, did you forget a type?" {:bindings bindings :body body})))
+  (assert (= (count bindings) 3) "We did something wrong with multiple lets. TODO: FIX")
   (let [bindings (map vec (partition 3 bindings))
         bindings-map (into {} (map (fn [[k _ _]]
                                      [k (list 'load-local {:name (name k)})])
@@ -285,7 +286,6 @@
                          (symbol (name (get aliases (symbol (namespace x)))) (name x))
                          :else x))
                  sexpr))
-
 
 
 (defn enrich-env-with-local-types [expr env]
@@ -444,6 +444,8 @@
  (defalias Type org.objectweb.asm.Type)
  (defalias Opcodes org.objectweb.asm.Opcodes)
  (defalias Class java.lang.Class)
+ (defalias Method org.objectweb.asm.commons.Method)
+
 
  (defenum lang.Code
    MultInt
@@ -483,17 +485,19 @@
    (JumpEqual stringValue java.lang.String
               compareType org.objectweb.asm.Type)
    (JumpCmp stringValue java.lang.String
-            compareType org.objectweb.asm.Type)
-   (Jump stringValue java.lang.String))
+            compareType org.objectweb.asm.Type
+            compareOp int)
+   (Jump stringValue java.lang.String)
+
+   (LocalMeta localObj int
+              localType org.objectweb.asm.Type))
 
  (defn lang.generateCode [gen org.objectweb.asm.commons.GeneratorAdapter code lang.Code void]
 
    (cond
 
      (.equals (.-tagName code) "MultInt")
-     (.math gen
-            GeneratorAdapter/MUL
-            org.objectweb.asm.Type/INT_TYPE)
+     (.math gen GeneratorAdapter/MUL org.objectweb.asm.Type/INT_TYPE)
 
      (.equals (.-tagName code) "PlusInt")
      (lang.generateCode/invoke gen (lang.Code/Math GeneratorAdapter/ADD Type/INT_TYPE))
@@ -570,7 +574,7 @@
      :else nil))
 
 
- (defn lang.myGenerateCode [gen org.objectweb.asm.commons.GeneratorAdapter void]
+ (defn lang.testGeneratingCode [gen org.objectweb.asm.commons.GeneratorAdapter void]
    (lang.generateCode/invoke gen (lang.Code/Int 42))
    (lang.generateCode/invoke gen (lang.Code/Int 4))
    (lang.generateCode/invoke gen (lang.Code/Print))
@@ -579,7 +583,8 @@
    (lang.generateCode/invoke gen (lang.Code/Return)))
 
 
- (defn lang.generateCodeWithEnv [gen org.objectweb.asm.commons.GeneratorAdapter code lang.Code env java.util.Map java.util.Map]
+ (defn lang.generateCodeWithEnv
+   [gen org.objectweb.asm.commons.GeneratorAdapter code lang.Code env java.util.Map java.util.Map]
    (cond
      (.equals (.-tagName code) "Label")
      (if (.containsKey env (.-stringValue code))
@@ -594,19 +599,119 @@
          (.put env (.-stringValue code) label)
          nil))
 
+
+
+     (.equals (.-tagName code) "JumpNotEqual")
+     (if (.containsKey env (.-stringValue code))
+       (let [label (.get env (.-stringValue code)) org.objectweb.asm.Label]
+         (.ifCmp gen (.-compareType code) GeneratorAdapter/NE label)
+         nil)
+       (let [label (.newLabel gen) org.objectweb.asm.Label]
+         (.ifCmp gen (.-compareType code) GeneratorAdapter/NE label)
+         (.put env (.-stringValue code) label)
+         nil))
+
+     (.equals (.-tagName code) "JumpEqual")
+     (if (.containsKey env (.-stringValue code))
+       (let [label (.get env (.-stringValue code)) org.objectweb.asm.Label]
+         (.ifCmp gen (.-compareType code) GeneratorAdapter/EQ label)
+         nil)
+       (let [label (.newLabel gen) org.objectweb.asm.Label]
+         (.ifCmp gen (.-compareType code) GeneratorAdapter/EQ label)
+         (.put env (.-stringValue code) label)
+         nil))
+
+
+     (.equals (.-tagName code) "JumpCompare")
+     (if (.containsKey env (.-stringValue code))
+       (do
+         ;; Bug in type checker that this passes
+         (.ifCmp gen (.-compareType code) (.-compareOp code) (.get env (.-stringValue code)))
+         nil)
+       (let [label (.newLabel gen) org.objectweb.asm.Label]
+         (.ifCmp gen (.-compareType code) (.-compareOp code) label)
+         (.put env (.-stringValue code) label)
+         nil))
+
+
      (.equals (.-tagName code) "Jump")
      (if (.containsKey env (.-stringValue code))
        (.goTo
         gen
         (.get env (.-stringValue code)))
-
        (let [label (.newLabel gen) org.objectweb.asm.Label]
          (.goTo gen label)
          (.put env (.-stringValue code) label)
          nil))
+
+     (.equals (.-tagName code) "StoreLocal")
+     (if (.containsKey env (.concat  "local-" (.-name code)))
+       (let [local (.get env (.concat  "local-" (.-name code))) lang.Code]
+         (.storeLocal gen (.-localObj local) (.-localType local))
+         (lang.generateCode/invoke gen (lang.Code/Nil))
+         nil)
+       (let [local2 (.newLocal gen (.-localType code)) int]
+         (.storeLocal gen local2 (.-localType code))
+         (lang.generateCode/invoke gen (lang.Code/Nil))
+         (.put env (.concat "local-" (.-name code)) (lang.Code/LocalMeta local2 (.-localType code)))
+         nil))
+
+     (.equals (.-tagName code) "LoadLocal")
+     (if (.containsKey env (.concat  "local-" (.-name code)))
+       (let [local (.get env (.concat  "local-" (.-name code))) lang.Code]
+         (.loadLocal gen (.-localObj local) (.-localType local))
+         nil)
+       ;; Make this error
+       nil)
+
+
      :else
-     (lang.myGenerateCode/invoke gen))
+     (lang.generateCode/invoke gen code))
    env)
+
+
+ (defn lang.generateDefaultConstructor [writer org.objectweb.asm.ClassWriter void]
+   (let [signature nil java.lang.String]
+     (let [exceptions nil Array/org.objectweb.asm.Type]
+       (let [gen (org.objectweb.asm.commons.GeneratorAdapter.
+                  Opcodes/ACC_PUBLIC
+                  (Method/getMethod "void <init>()")
+                  signature
+                  exceptions
+                  writer)
+             org.objectweb.asm.commons.GeneratorAdapter]
+         (.visitCode gen)
+         (.loadThis gen)
+         (.invokeConstructor gen (Type/getType (Class/forName "java.lang.Object"))  (Method/getMethod "void <init>()"))
+         (.returnValue gen)
+         (.endMethod gen)))))
+
+ (defn lang.initializeClass [writer org.objectweb.asm.ClassWriter className java.lang.String void]
+   (let [signature nil java.lang.String]
+     (let [interfaces nil Array/java.lang.String]
+       (.visit writer Opcodes/V1_8 Opcodes/ACC_PUBLIC className signature "java/lang/Object" interfaces))))
+
+
+ ;; (lang.generateAllTheCode gen code)
+ ;; Make it loop over the array of code and generate with env
+
+
+
+ (defn lang.generateInvokeMethod [writer org.objectweb.asm.ClassWriter
+                                  code Array/lang.Code
+                                  returnType org.objectweb.asm.Type
+                                  argTypes Array/org.objectweb.asm.Type
+                                  void]
+   (let [method (org.objectweb.asm.commons.Method. "invoke" returnType argTypes) org.objectweb.asm.commons.Method]
+     (let [signature nil java.lang.String]
+       (let [exceptions nil Array/org.objectweb.asm.Type]
+         (let [gen (org.objectweb.asm.commons.GeneratorAdapter. (plus-int Opcodes/ACC_PUBLIC Opcodes/ACC_STATIC) method signature exceptions writer)
+               org.objectweb.asm.commons.GeneratorAdapter]
+           #_(lang.generateAllTheCode gen code)
+           (.endMethod gen))))))
+
+
+
 
  (defn lang.parseThatInt [s java.lang.String int]
    (java.lang.Integer/parseInt s))
@@ -630,7 +735,7 @@
 
   (backend/make-fn-with-callback
    "lang2.MyAwesomeCode"
-   #(lang.myGenerateCode/invoke %))
+   #(lang.testGeneratingCode/invoke %))
 
   [(lang2.MyAwesomeCode/invoke)
 
