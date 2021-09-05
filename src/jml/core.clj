@@ -139,17 +139,17 @@
 (defn replace-sexprs [sexpr replacement-map]
   (walk/postwalk-replace replacement-map sexpr))
 
-
 (defn desugar-let [[_ bindings & body]]
   (when-not (zero? (mod (count bindings) 3))
     (throw (ex-info "Invalid bindings, did you forget a type?" {:bindings bindings :body body})))
-  (assert (= (count bindings) 3) "We did something wrong with multiple lets. TODO: FIX")
   (let [bindings (map vec (partition 3 bindings))
         bindings-map (into {} (map (fn [[k _ _]]
                                      [k (list 'load-local {:name (name k)})])
                                    bindings))
         locals (map (fn [[k v t]]
-                      (list 'store-local {:name (name k) :local-type t} v)) bindings)
+                      (list 'store-local {:name (name k) :local-type t}
+                            ;; For let's with multiple binding, we need to replace refences to other locals inside v
+                            (replace-sexprs v bindings-map))) bindings)
         body (replace-sexprs body bindings-map)]
 
     (concat '(do) locals body)))
@@ -291,7 +291,16 @@
 (defn enrich-env-with-local-types [expr env]
   (assoc env :local-types
          (->> (tree-seq vector? #(into [] (rest (rest %))) expr)
-              (filter #(= :store-local (first %)))
+              (filter (fn [e]
+                        (when (not (seqable? e))
+                          (throw (ex-info (format
+                                           "SyntaxError? - Expected [:op props children] structured expr, but found: '%s'"
+                                           e)
+                                          {:parent-expr expr
+                                           :expr e
+                                           :from "enrich-env-with-local-types"
+                                           :env env})))
+                        (= :store-local (first e))))
               (map (fn [[_ props & _]]
                      [(:name props) (:local-type props)]))
               (into {}))))
@@ -671,25 +680,25 @@
 
 
  (defn lang.generateDefaultConstructor [writer org.objectweb.asm.ClassWriter void]
-   (let [signature nil java.lang.String]
-     (let [exceptions nil Array/org.objectweb.asm.Type]
-       (let [gen (org.objectweb.asm.commons.GeneratorAdapter.
-                  Opcodes/ACC_PUBLIC
-                  (Method/getMethod "void <init>()")
-                  signature
-                  exceptions
-                  writer)
-             org.objectweb.asm.commons.GeneratorAdapter]
-         (.visitCode gen)
-         (.loadThis gen)
-         (.invokeConstructor gen (Type/getType (Class/forName "java.lang.Object"))  (Method/getMethod "void <init>()"))
-         (.returnValue gen)
-         (.endMethod gen)))))
+   (let [signature nil java.lang.String
+         exceptions nil Array/org.objectweb.asm.Type
+         gen (org.objectweb.asm.commons.GeneratorAdapter.
+              Opcodes/ACC_PUBLIC
+              (Method/getMethod "void <init>()")
+              signature
+              exceptions
+              writer)
+         org.objectweb.asm.commons.GeneratorAdapter]
+     (.visitCode gen)
+     (.loadThis gen)
+     (.invokeConstructor gen (Type/getType (Class/forName "java.lang.Object"))  (Method/getMethod "void <init>()"))
+     (.returnValue gen)
+     (.endMethod gen)))
 
  (defn lang.initializeClass [writer org.objectweb.asm.ClassWriter className java.lang.String void]
-   (let [signature nil java.lang.String]
-     (let [interfaces nil Array/java.lang.String]
-       (.visit writer Opcodes/V1_8 Opcodes/ACC_PUBLIC className signature "java/lang/Object" interfaces))))
+   (let [signature nil java.lang.String
+         interfaces nil Array/java.lang.String]
+     (.visit writer Opcodes/V1_8 Opcodes/ACC_PUBLIC className signature "java/lang/Object" interfaces)))
 
 
  ;; (lang.generateAllTheCode gen code)
@@ -702,13 +711,12 @@
                                   returnType org.objectweb.asm.Type
                                   argTypes Array/org.objectweb.asm.Type
                                   void]
-   (let [method (org.objectweb.asm.commons.Method. "invoke" returnType argTypes) org.objectweb.asm.commons.Method]
-     (let [signature nil java.lang.String]
-       (let [exceptions nil Array/org.objectweb.asm.Type]
-         (let [gen (org.objectweb.asm.commons.GeneratorAdapter. (plus-int Opcodes/ACC_PUBLIC Opcodes/ACC_STATIC) method signature exceptions writer)
-               org.objectweb.asm.commons.GeneratorAdapter]
-           #_(lang.generateAllTheCode gen code)
-           (.endMethod gen))))))
+   (let [method (org.objectweb.asm.commons.Method. "invoke" returnType argTypes) org.objectweb.asm.commons.Method
+         signature nil java.lang.String
+         exceptions nil Array/org.objectweb.asm.Type
+         gen (org.objectweb.asm.commons.GeneratorAdapter. (plus-int Opcodes/ACC_PUBLIC Opcodes/ACC_STATIC) method signature exceptions writer) org.objectweb.asm.commons.GeneratorAdapter]
+    #_ (lang.generateAllTheCode/invoke gen code)
+     (.endMethod gen)))
 
 
 
