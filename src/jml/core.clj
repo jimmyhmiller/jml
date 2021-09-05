@@ -475,6 +475,7 @@
  (defalias GeneratorAdapter org.objectweb.asm.commons.GeneratorAdapter)
  (defalias ClassWriter  org.objectweb.asm.ClassWriter)
  (defalias Type org.objectweb.asm.Type)
+ (defalias Label org.objectweb.asm.Label)
  (defalias Opcodes org.objectweb.asm.Opcodes)
  (defalias Class java.lang.Class)
  (defalias Method org.objectweb.asm.commons.Method)
@@ -618,7 +619,7 @@
 
 
  (defn lang.generateCodeWithEnv
-   [gen GeneratorAdapter code lang.Code env java.util.Map java.util.Map]
+   [gen GeneratorAdapter code lang.Code env Map Map]
    (cond
      (.equals (.-tagName code) "Label")
      (if (.containsKey env (.-stringValue code))
@@ -626,7 +627,7 @@
         gen
         (.get env (.-stringValue code)))
 
-       (let [label (.newLabel gen) org.objectweb.asm.Label]
+       (let [label (.newLabel gen) Label]
          (.mark
           gen
           (.get env (.-stringValue code)))
@@ -637,20 +638,20 @@
 
      (.equals (.-tagName code) "JumpNotEqual")
      (if (.containsKey env (.-stringValue code))
-       (let [label (.get env (.-stringValue code)) org.objectweb.asm.Label]
+       (let [label (.get env (.-stringValue code)) Label]
          (.ifCmp gen (.-compareType code) GeneratorAdapter/NE label)
          nil)
-       (let [label (.newLabel gen) org.objectweb.asm.Label]
+       (let [label (.newLabel gen) Label]
          (.ifCmp gen (.-compareType code) GeneratorAdapter/NE label)
          (.put env (.-stringValue code) label)
          nil))
 
      (.equals (.-tagName code) "JumpEqual")
      (if (.containsKey env (.-stringValue code))
-       (let [label (.get env (.-stringValue code)) org.objectweb.asm.Label]
+       (let [label (.get env (.-stringValue code)) Label]
          (.ifCmp gen (.-compareType code) GeneratorAdapter/EQ label)
          nil)
-       (let [label (.newLabel gen) org.objectweb.asm.Label]
+       (let [label (.newLabel gen) Label]
          (.ifCmp gen (.-compareType code) GeneratorAdapter/EQ label)
          (.put env (.-stringValue code) label)
          nil))
@@ -662,7 +663,7 @@
          ;; Bug in type checker that this passes
          (.ifCmp gen (.-compareType code) (.-compareOp code) (.get env (.-stringValue code)))
          nil)
-       (let [label (.newLabel gen) org.objectweb.asm.Label]
+       (let [label (.newLabel gen) Label]
          (.ifCmp gen (.-compareType code) (.-compareOp code) label)
          (.put env (.-stringValue code) label)
          nil))
@@ -673,7 +674,7 @@
        (.goTo
         gen
         (.get env (.-stringValue code)))
-       (let [label (.newLabel gen) org.objectweb.asm.Label]
+       (let [label (.newLabel gen) Label]
          (.goTo gen label)
          (.put env (.-stringValue code) label)
          nil))
@@ -722,7 +723,7 @@
      (.endMethod gen)))
 
  (defn lang.initializeClass [writer ClassWriter className String void]
-   (let [signature nil java.lang.String
+   (let [signature nil String
          interfaces nil Array/String]
      (.visit writer Opcodes/V1_8 Opcodes/ACC_PUBLIC className signature "java/lang/Object" interfaces)))
 
@@ -740,7 +741,9 @@
    (let [method (Method. "invoke" returnType argTypes) Method
          signature nil String
          exceptions nil Array/Type
-         gen (GeneratorAdapter. (plus-int Opcodes/ACC_PUBLIC Opcodes/ACC_STATIC) method signature exceptions writer) GeneratorAdapter]
+         gen (GeneratorAdapter.
+              (plus-int Opcodes/ACC_PUBLIC Opcodes/ACC_STATIC)
+              method signature exceptions writer) GeneratorAdapter]
     #_ (lang.generateAllTheCode/invoke gen code)
      (.endMethod gen)))
 
