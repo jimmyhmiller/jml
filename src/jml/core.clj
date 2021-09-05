@@ -277,14 +277,35 @@
 (defn replace-args [sexpr arg-names]
   (replace-sexprs sexpr (into {} (map vector arg-names (map (fn [i] (list 'arg i)) (range))))))
 
+(defn de-alias-type [ty {:keys [aliases] :as env}]
+  (if (and (symbol? ty) (=  (namespace ty) "Array"))
+    (if-let [array-item-ty (get aliases (symbol (name ty)))]
+      (symbol "Array" (name array-item-ty))
+      ty)
+    (get aliases ty ty)))
 
-(defn replace-aliases [sexpr aliases]
+
+(defn strip-interop-dot [sym]
+  (let [ns (namespace sym)
+        n (name sym)]
+    (symbol ns (subs n 0 (dec (count n))))))
+
+(defn add-interop-dot [sym]
+  (let [ns (namespace sym)
+        n (name sym)]
+    (symbol ns (str n "."))))
+
+
+(defn replace-aliases [sexpr {:keys [aliases] :as env}]
   (walk/postwalk (fn [x]
+                   ;; TODO this should probably be merged with de-alias-type into single function
                    (cond (not (symbol? x)) x
-                         (simple-symbol? x) x
+                         (and (symbol? x) (string/ends-with? (name x) "."))
+                         (add-interop-dot (de-alias-type (strip-interop-dot x) env))
+                         (simple-symbol? x) (de-alias-type x env)
                          (contains? aliases (symbol (namespace x)))
                          (symbol (name (get aliases (symbol (namespace x)))) (name x))
-                         :else x))
+                         :else (de-alias-type x env)))
                  sexpr))
 
 
@@ -302,33 +323,34 @@
                                            :env env})))
                         (= :store-local (first e))))
               (map (fn [[_ props & _]]
-                     [(:name props) (:local-type props)]))
+                     [(:name props) (de-alias-type  (:local-type props) env)]))
               (into {}))))
 
 
 (defn process-defn-for-types [[_ fn-name types & body] env]
   (let [arg-names (mapv first (partition 2 (butlast types)))
-        arg-types (mapv second (partition 2 (butlast types)))
+        arg-types (mapv (fn [[_ ty]] (de-alias-type ty env))  (partition 2 (butlast types)))
+        return-type (de-alias-type (last types) env)
         env (assoc-in env
                       [:functions fn-name]
                       {:type :fn
                        :class-name (string/replace (name fn-name) "." "/")
                        :arg-types arg-types
-                       :return-type (last types)})
+                       :return-type return-type})
         expr (-> (cons 'do body)
                  replace-let-exprs
                  (replace-args arg-names)
-                 (replace-aliases (:aliases env))
+                 (replace-aliases  env)
                  de-sexpr)
         env (enrich-env-with-local-types expr env)]
     (assoc-in env [:functions fn-name :code]
               (time (type-checker/augment {:expr expr
                                            :env (assoc env :arg-types arg-types)
-                                           :type (last types)})))))
+                                           :type return-type})))))
 
 
 
-(defn process-enum [[_ enum-name & variants]]
+(defn process-enum [[_ enum-name & variants] env]
   {:class-name (string/replace (str enum-name) "." "/")
    :variants
    (mapv (fn [variant]
@@ -337,7 +359,7 @@
               :fields []}
              {:name (str (first variant))
               :fields (mapv (fn [[name type]]
-                              {:name (str name) :type (resolve-type type)})
+                              {:name (str name) :type  (de-alias-type (resolve-type type) env)})
                             (partition 2 (rest variant)))}))
          variants)})
 
@@ -350,7 +372,7 @@
                                       (mapcat (fn [variant]
                                                 (rest variant)))
                                       (partition 2)
-                                      (map (fn [[n t]] [(str n) t]))
+                                      (map (fn [[n t]] [(str n) (de-alias-type t env)]))
                                       (map vec)
                                       (into {"tagName" 'java.lang.String}))})
       (update :functions merge (->> variants
@@ -358,7 +380,8 @@
                                             (if (symbol? variant)
                                               [variant {:arg-types []
                                                         :return-type enum-name}]
-                                              [(first variant) {:arg-types (mapv second (partition 2 (rest variant)))
+                                              [(first variant) {:arg-types  (mapv (fn [[_ ty]] (de-alias-type ty env))
+                                                                                  (partition 2 (rest variant)))
                                                                 :return-type enum-name}])))
                                     (into {})))))
 
@@ -379,7 +402,7 @@
                                           (update :return-type resolve-type)
                                           (update :code (fn [code] (concat (linearize* code) [[:return]])))))
                      env)
-              defenum (do (backend/make-enum (process-enum s-expr))
+              defenum (do (backend/make-enum (process-enum s-expr env))
                           (process-enum-for-types s-expr env))
               defalias (process-alias s-expr env)
               (throw (ex-info "unhandled" {:s-expr s-expr}))))
@@ -450,11 +473,13 @@
 
 
  (defalias GeneratorAdapter org.objectweb.asm.commons.GeneratorAdapter)
+ (defalias ClassWriter  org.objectweb.asm.ClassWriter)
  (defalias Type org.objectweb.asm.Type)
  (defalias Opcodes org.objectweb.asm.Opcodes)
  (defalias Class java.lang.Class)
  (defalias Method org.objectweb.asm.commons.Method)
-
+ (defalias String java.lang.String)
+ (defalias Map java.util.Map)
 
  (defenum lang.Code
    MultInt
@@ -467,41 +492,41 @@
    Nil
    (Arg argIndex int)
    (Math op int
-         opType org.objectweb.asm.Type)
-   (GetStatic owner org.objectweb.asm.Type
-              name java.lang.String
-              resultType org.objectweb.asm.Type)
-   (InvokeStatic owner org.objectweb.asm.Type
-                 method org.objectweb.asm.commons.Method)
-   (InvokeVirtual owner org.objectweb.asm.Type
-                  method org.objectweb.asm.commons.Method)
-   (InvokeConstructor owner org.objectweb.asm.Type
-                      method org.objectweb.asm.commons.Method)
-   (New owner org.objectweb.asm.Type
-        method org.objectweb.asm.commons.Method)
+         opType Type)
+   (GetStatic owner Type
+              name String
+              resultType Type)
+   (InvokeStatic owner Type
+                 method Method)
+   (InvokeVirtual owner Type
+                  method Method)
+   (InvokeConstructor owner Type
+                      method Method)
+   (New owner Type
+        method Method)
    (Bool boolValue boolean)
    (Int intValue int)
-   (String stringValue java.lang.String)
-   (GetField owner org.objectweb.asm.Type
-             name java.lang.String
-             fieldType org.objectweb.asm.Type)
-   (PutField owner org.objectweb.asm.Type
-             name java.lang.String
-             fieldType org.objectweb.asm.Type)
-   (Label stringValue java.lang.String)
-   (JumpNotEqual stringValue java.lang.String
-                 compareType org.objectweb.asm.Type)
-   (JumpEqual stringValue java.lang.String
-              compareType org.objectweb.asm.Type)
-   (JumpCmp stringValue java.lang.String
-            compareType org.objectweb.asm.Type
+   (String stringValue String)
+   (GetField owner Type
+             name String
+             fieldType Type)
+   (PutField owner Type
+             name String
+             fieldType Type)
+   (Label stringValue String)
+   (JumpNotEqual stringValue String
+                 compareType Type)
+   (JumpEqual stringValue String
+              compareType Type)
+   (JumpCmp stringValue String
+            compareType Type
             compareOp int)
-   (Jump stringValue java.lang.String)
+   (Jump stringValue String)
 
    (LocalMeta localObj int
-              localType org.objectweb.asm.Type))
+              localType Type))
 
- (defn lang.generateCode [gen org.objectweb.asm.commons.GeneratorAdapter code lang.Code void]
+ (defn lang.generateCode [gen GeneratorAdapter code lang.Code void]
 
    (cond
 
@@ -574,16 +599,16 @@
        (.invokeVirtual gen (Type/getType
                             (.getType (.getDeclaredField (Class/forName "java.lang.System")
                                                          "out")))
-                       (let [arg-types (new-array org.objectweb.asm.Type 1) Array/org.objectweb.asm.Type]
+                       (let [arg-types (new-array Type 1) Array/Type]
                          (array-store arg-types 0 Type/INT_TYPE)
-                         (org.objectweb.asm.commons.Method. "println" Type/VOID_TYPE arg-types))))
+                         (Method. "println" Type/VOID_TYPE arg-types))))
      (.equals (.-tagName code) "Return")
      (.returnValue gen)
 
      :else nil))
 
 
- (defn lang.testGeneratingCode [gen org.objectweb.asm.commons.GeneratorAdapter void]
+ (defn lang.testGeneratingCode [gen GeneratorAdapter void]
    (lang.generateCode/invoke gen (lang.Code/Int 42))
    (lang.generateCode/invoke gen (lang.Code/Int 4))
    (lang.generateCode/invoke gen (lang.Code/Print))
@@ -593,7 +618,7 @@
 
 
  (defn lang.generateCodeWithEnv
-   [gen org.objectweb.asm.commons.GeneratorAdapter code lang.Code env java.util.Map java.util.Map]
+   [gen GeneratorAdapter code lang.Code env java.util.Map java.util.Map]
    (cond
      (.equals (.-tagName code) "Label")
      (if (.containsKey env (.-stringValue code))
@@ -678,26 +703,27 @@
      (lang.generateCode/invoke gen code))
    env)
 
+ 
 
- (defn lang.generateDefaultConstructor [writer org.objectweb.asm.ClassWriter void]
-   (let [signature nil java.lang.String
-         exceptions nil Array/org.objectweb.asm.Type
-         gen (org.objectweb.asm.commons.GeneratorAdapter.
+ (defn lang.generateDefaultConstructor [writer ClassWriter void]
+   (let [signature nil String
+         exceptions nil Array/Type
+         gen (GeneratorAdapter.
               Opcodes/ACC_PUBLIC
               (Method/getMethod "void <init>()")
               signature
               exceptions
               writer)
-         org.objectweb.asm.commons.GeneratorAdapter]
+         GeneratorAdapter]
      (.visitCode gen)
      (.loadThis gen)
      (.invokeConstructor gen (Type/getType (Class/forName "java.lang.Object"))  (Method/getMethod "void <init>()"))
      (.returnValue gen)
      (.endMethod gen)))
 
- (defn lang.initializeClass [writer org.objectweb.asm.ClassWriter className java.lang.String void]
+ (defn lang.initializeClass [writer ClassWriter className String void]
    (let [signature nil java.lang.String
-         interfaces nil Array/java.lang.String]
+         interfaces nil Array/String]
      (.visit writer Opcodes/V1_8 Opcodes/ACC_PUBLIC className signature "java/lang/Object" interfaces)))
 
 
@@ -706,31 +732,29 @@
 
 
 
- (defn lang.generateInvokeMethod [writer org.objectweb.asm.ClassWriter
+ (defn lang.generateInvokeMethod [writer ClassWriter
                                   code Array/lang.Code
-                                  returnType org.objectweb.asm.Type
-                                  argTypes Array/org.objectweb.asm.Type
+                                  returnType Type
+                                  argTypes Array/Type
                                   void]
-   (let [method (org.objectweb.asm.commons.Method. "invoke" returnType argTypes) org.objectweb.asm.commons.Method
-         signature nil java.lang.String
-         exceptions nil Array/org.objectweb.asm.Type
-         gen (org.objectweb.asm.commons.GeneratorAdapter. (plus-int Opcodes/ACC_PUBLIC Opcodes/ACC_STATIC) method signature exceptions writer) org.objectweb.asm.commons.GeneratorAdapter]
+   (let [method (Method. "invoke" returnType argTypes) Method
+         signature nil String
+         exceptions nil Array/Type
+         gen (GeneratorAdapter. (plus-int Opcodes/ACC_PUBLIC Opcodes/ACC_STATIC) method signature exceptions writer) GeneratorAdapter]
     #_ (lang.generateAllTheCode/invoke gen code)
      (.endMethod gen)))
 
 
 
 
- (defn lang.parseThatInt [s java.lang.String int]
+ (defn lang.parseThatInt [s String int]
    (java.lang.Integer/parseInt s))
 
  ;; this doesn't actually work because the type isn't resolved yet :(
  (defn lang.factorial [n int int]
    (if (= n 1)
      1
-     (mult-int n (lang.factorial/invoke (sub-int n 1)))))
-
- )
+     (mult-int n (lang.factorial/invoke (sub-int n 1))))))
 
 
 
