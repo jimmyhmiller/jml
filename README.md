@@ -1,7 +1,7 @@
 # jml
 
 
-## Attributes
+## Aspiration Attributes
 - Rust Inspired
 - ML Inspired
 - Statically Typed
