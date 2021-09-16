@@ -53,8 +53,7 @@
 (defn create-method [{:keys [name arg-types return-type]}]
   (Method. name (symbol->type return-type) (to-type-array arg-types)))
 
-
-(defn get-methods-jvm [klass method-name method-args ancestors]
+(defn get-methods-jvm [klass method-name method-args ancestors]  
   (->> (reflect/reflect klass :ancestors ancestors)
        :members
        (filter (comp #{(symbol method-name)} :name))
@@ -64,6 +63,12 @@
                  (or (nil? method-args)
                      (every? jvm-type-equiv? (map vector parameter-types method-args)))))))
 
+(defn get-class-ancestors [klass]
+  ;; keeps calling `klass`'s getSuperclass until we get all the way to java.lang.Object
+  ;; needed because it turns out just passing `true` to (reflect/reflect klass :ancestors `true`)
+  ;; doesn't really do anything, one needs to pass a list of ancestor classes
+  (take-while #(not= % Object) (iterate #(.getSuperclass %) klass)))
+
 
 (defn get-method-info-jvm
   ([klass method-name method-args]
@@ -71,7 +76,7 @@
   ([klass method-name method-args ancestors]
    (let [methods (get-methods-jvm klass method-name method-args ancestors)
          methods (if (and (empty? methods) (false? ancestors))
-                   (get-methods-jvm klass method-name method-args true)
+                   (get-methods-jvm klass method-name method-args (get-class-ancestors klass))
                    methods)
          _ (when-not (= 1 (count methods))
              (throw (ex-info "Method overloaded. Need to be more or less specific"
@@ -79,6 +84,7 @@
                               :method-name method-name
                               :methods methods
                               :method-args method-args
+                              :ancestors ancestors
                               :available-methods
                               (->> (reflect/reflect klass :ancestors ancestors)
                                    :members

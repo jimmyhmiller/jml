@@ -359,7 +359,7 @@
               :fields []}
              {:name (str (first variant))
               :fields (mapv (fn [[name type]]
-                              {:name (str name) :type  (de-alias-type (resolve-type type) env)})
+                              {:name (str name) :type  (resolve-type (de-alias-type  type env))})
                             (partition 2 (rest variant)))}))
          variants)})
 
@@ -398,8 +398,9 @@
                          env (process-defn-for-types s-expr env)
                          function (get-in env [:functions fn-name])]
                      (backend/make-fn (-> function
-                                          (update :arg-types #(map resolve-type %))
-                                          (update :return-type resolve-type)
+                                          (update :arg-types (fn [arg-types]
+                                                               (map #(resolve-type (de-alias-type %  env)) arg-types)))
+                                          (update :return-type #(resolve-type (de-alias-type % env)))
                                           (update :code (fn [code] (concat (linearize* code) [[:return]])))))
                      env)
               defenum (do (backend/make-enum (process-enum s-expr env))
