@@ -53,7 +53,7 @@
 (defn create-method [{:keys [name arg-types return-type]}]
   (Method. name (symbol->type return-type) (to-type-array arg-types)))
 
-(defn get-methods-jvm [klass method-name method-args ancestors]  
+(defn get-methods-jvm [klass method-name method-args ancestors]
   (->> (reflect/reflect klass :ancestors ancestors)
        :members
        (filter (comp #{(symbol method-name)} :name))
@@ -175,7 +175,22 @@
             (matches-type pred (assoc context :expr (nth expr 2) :type 'boolean))
             (matches-type branch1 (assoc context :expr (nth expr 3)))
             (matches-type branch2 (assoc context :expr (nth expr 4)))))
+
+    :while
+    (do
+      (def while-expr expr)
+      (def while-context context )
+      (let [[_ _ pred & body] expr
+            pred (augment-then-synth (assoc  (dissoc context :type) :expr pred))
+            body-last  (augment-then-synth (assoc context :expr (last body)))]
+
+        (matches-type pred (assoc context :expr (nth expr 2) :type 'boolean))
+        (matches-type body-last (assoc context :expr (last body)))))
     := (matches-type 'boolean context)
+    :> (matches-type 'boolean context)
+    :< (matches-type 'boolean context)
+    :>= (matches-type 'boolean context)
+    :<= (matches-type 'boolean context)
     :invoke-static (do
                      (matches-type (:return-type (second expr)) context)
                      (doseq [[type expr] (map vector (:arg-types (second expr)) (rest (rest expr)))]
@@ -230,10 +245,16 @@
     ;; Fix by looking in env
     :load-local (get-in env [:local-types  (:name (second expr))])
     := 'boolean
+    :> 'boolean
+    :< 'boolean
+    :>= 'boolean
+    :<= 'boolean
     :do (augment-then-synth {:expr (last expr) :env env})
     :nil 'void
     ;; Is this right?
     :if (synth {:expr (last expr) :env env})
+    :while (let [[_ pred & body] expr]
+             (synth {:expr (last body) :env env}))
     :pop 'void
     :store-local 'void
     (throw (ex-info "No matching synth" {:expr expr :env env}))))
@@ -415,6 +436,14 @@
                                              result)]
                (mapv (augment-sub-expr context)
                      (rest (rest (rest expr)))))
+    :while  (into [(first expr) (second expr) (let [result
+                                                    (augment (assoc (dissoc context :type) :expr  (nth expr 2)))]
+                                                (check {:expr result
+                                                        :env env
+                                                        :type 'boolean})
+                                                result)]
+                  (mapv (augment-sub-expr context)
+                        (rest (rest (rest expr)))))
     :pop [:pop]
 
     (do

@@ -111,6 +111,33 @@
     node))
 
 
+
+(defn desugar-while [[tag _ pred & body :as node]]
+  (if (= tag :while)
+    (let [loop-label (gensym "while-loop_")
+          body-label (gensym "while-body_")
+          exit-label (gensym "while-exit_")
+          {:keys [compare-op compare-type
+                  arg1 arg2]}     (resolve-cmp-op pred)]
+      (into [:do]
+            (concat [
+
+
+                     [:label {:value loop-label}]
+                     arg1
+                     arg2
+                     [:jump-cmp {:value body-label
+                                 :compare-op compare-op
+                                 :compare-type compare-type}]
+                     [:jump {:value exit-label}]
+                     [:label {:value body-label}]]
+                    body
+                    [[:jump {:value loop-label}]
+                     [:label {:value exit-label}]]))
+      )
+    node))
+
+
 (defn full-symbol-name [x]
   (if (simple-symbol? x)
     x
@@ -153,6 +180,10 @@
         body (replace-sexprs body bindings-map)]
 
     (concat '(do) locals body)))
+
+(desugar-let '(let [a 2 int
+                    b (f s) int]
+                (+ b a)))
 
 
 (defn replace-let-exprs [expr]
@@ -257,6 +288,9 @@
 
           (= op :if)
           (recur (desugar-if code))
+
+          (= op :while)
+          (recur (desugar-while code))
 
           (= op :do)
           (into [] (mapcat linearize* children))
@@ -429,10 +463,14 @@
  (defn lang.createArray [i int Array/int]
    (let [a (new-array int 2) Array/int
          b 2 int]
-     (array-store  a  0 i)
-     (array-store  a  1 (mult-int i 2))
+     (while (< (array-load a 0) i)
+       #_(println (array-load a 0))
+       (array-store  a  0 (mult-int i 2)))
+     ;(array-store  a  0 i)
+
      (array-load   a  0)
      a)))
+
 
 (lang.createArray/invoke 23)
 
@@ -705,7 +743,7 @@
      (lang.generateCode/invoke gen code))
    env)
 
- 
+
 
  (defn lang.generateDefaultConstructor [writer ClassWriter void]
    (let [signature nil String
