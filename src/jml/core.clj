@@ -181,10 +181,6 @@
 
     (concat '(do) locals body)))
 
-(desugar-let '(let [a 2 int
-                    b (f s) int]
-                (+ b a)))
-
 
 (defn replace-let-exprs [expr]
   (walk/postwalk
