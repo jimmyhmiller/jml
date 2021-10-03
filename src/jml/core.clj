@@ -129,7 +129,8 @@
                [:jump {:value exit-label}]
                [:label {:value body-label}]]
               
-              [(-> (into [:do]  body)
+              [(-> (interpose [:pop] body)
+                   vec
                    ;; TODO reconsider this, I'm assuming purely side effecting while loops,
                    ;; i.e. we need to pop last expression from the stack as we won't be consuming it in any way
                    (conj [:pop]))] 
@@ -471,8 +472,8 @@
      (array-store a 0 1)
      (while (< (array-load a 0) i)
         242
-      #_ (print (array-load a 0))
-       (array-store  a  0 (mult-int (array-load a 0) 2)))                                        
+       (print (array-load a 0))
+       (array-store  a  0 (print  (mult-int (array-load a 0) 2))))                                        
 
      (array-load a 0))))
 

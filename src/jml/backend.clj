@@ -74,7 +74,7 @@
       (.pop gen)
 
       :print (do
-               (.dup gen)
+               (.dup gen) ;; we're keeping print argument on the stack so that it seems like print returns it's arg
                (.getStatic gen
                            (Type/getType (Class/forName "java.lang.System"))
                            "out"
