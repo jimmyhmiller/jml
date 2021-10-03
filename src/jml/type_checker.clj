@@ -176,16 +176,13 @@
             (matches-type branch1 (assoc context :expr (nth expr 3)))
             (matches-type branch2 (assoc context :expr (nth expr 4)))))
 
-    :while
-    (do
-      (def while-expr expr)
-      (def while-context context )
-      (let [[_ _ pred & body] expr
-            pred (augment-then-synth (assoc  (dissoc context :type) :expr pred))
-            body-last  (augment-then-synth (assoc context :expr (last body)))]
+    :while    
+    (let [[_ _ pred & body] expr
+          pred (augment-then-synth (assoc  (dissoc context :type) :expr pred))
+          body-last  (augment-then-synth (assoc context :expr (last body)))]
 
-        (matches-type pred (assoc context :expr (nth expr 2) :type 'boolean))
-        (matches-type body-last (assoc context :expr (last body)))))
+      (matches-type pred (assoc context :expr (nth expr 2) :type 'boolean))
+      #_(matches-type body-last (assoc context :expr (last body))))
     := (matches-type 'boolean context)
     :> (matches-type 'boolean context)
     :< (matches-type 'boolean context)
@@ -211,6 +208,7 @@
     :do (matches-type (augment-then-synth (assoc context :expr (last expr))) context)
     :nil (matches-type 'void context)
     :pop (matches-type 'void context)
+    :print (matches-type 'void context)
     ;; Need to actually be augmenting env
     :store-local (matches-type 'void context)
     :load-local (matches-type (synth context) context)
@@ -253,8 +251,9 @@
     :nil 'void
     ;; Is this right?
     :if (synth {:expr (last expr) :env env})
-    :while (let [[_ pred & body] expr]
-             (synth {:expr (last body) :env env}))
+    :while 'void #_(let [[_ pred & body] expr]
+                     (synth {:expr (last body) :env env}))
+    :print 'void
     :pop 'void
     :store-local 'void
     (throw (ex-info "No matching synth" {:expr expr :env env}))))

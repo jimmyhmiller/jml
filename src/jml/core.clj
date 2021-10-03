@@ -118,22 +118,24 @@
           body-label (gensym "while-body_")
           exit-label (gensym "while-exit_")
           {:keys [compare-op compare-type
-                  arg1 arg2]}     (resolve-cmp-op pred)]
-      (into [:do]
-            (concat [
-
-
-                     [:label {:value loop-label}]
-                     arg1
-                     arg2
-                     [:jump-cmp {:value body-label
-                                 :compare-op compare-op
-                                 :compare-type compare-type}]
-                     [:jump {:value exit-label}]
-                     [:label {:value body-label}]]
-                    body
-                    [[:jump {:value loop-label}]
-                     [:label {:value exit-label}]]))
+                  arg1 arg2]}     (resolve-cmp-op pred)]     
+      (concat [
+               [:label {:value loop-label}]
+               arg1
+               arg2
+               [:jump-cmp {:value body-label
+                           :compare-op compare-op
+                           :compare-type compare-type}] ;; :jump-not-equal to exit 
+               [:jump {:value exit-label}]
+               [:label {:value body-label}]]
+              
+              [(-> (into [:do]  body)
+                   ;; TODO reconsider this, I'm assuming purely side effecting while loops,
+                   ;; i.e. we need to pop last expression from the stack as we won't be consuming it in any way
+                   (conj [:pop]))] 
+              [[:jump {:value loop-label}]
+               [:label {:value exit-label}]
+               [:nil]])
       )
     node))
 
@@ -286,7 +288,7 @@
           (recur (desugar-if code))
 
           (= op :while)
-          (recur (desugar-while code))
+          (into [] (mapcat linearize*  (desugar-while code)))
 
           (= op :do)
           (into [] (mapcat linearize* children))
@@ -453,22 +455,72 @@
    (java.lang.Integer. 2)))
 
 (jml
+ (defn lang.printer [x int void]
+   (print x)
+   (print x )))
+
+(lang.printer/invoke 42)
+
+(jml
  (defalias Type org.objectweb.asm.Type)
  (defalias Class java.lang.Class)
 
- (defn lang.createArray [i int Array/int]
+ (defn lang.createArray [i int int]
    (let [a (new-array int 2) Array/int
          b 2 int]
+     (array-store a 0 1)
      (while (< (array-load a 0) i)
-       #_(println (array-load a 0))
-       (array-store  a  0 (mult-int i 2)))
-     ;(array-store  a  0 i)
+        242
+      #_ (print (array-load a 0))
+       (array-store  a  0 (mult-int (array-load a 0) 2)))                                        
 
-     (array-load   a  0)
-     a)))
+     (array-load a 0))))
 
 
-(lang.createArray/invoke 23)
+
+
+(def f (future 
+         (lang.createArray/invoke 12)))
+@f
+(cancel-future f)
+
+(jml
+ (defalias Type org.objectweb.asm.Type)
+ (defalias Class java.lang.Class)
+
+ (defn lang.createArrayT1 [i int int]   
+   (while (< i 25)
+     (print (mult-int i 2)))
+   
+   i))
+#_
+(lang.createArrayT1/invoke 23)
+backend/fn-desc
+
+(backend/make-fn
+ {:type :fn,
+  :class-name "lang/createArrayT2",
+  :arg-types [Type/INT_TYPE]
+  :return-type Type/INT_TYPE
+  :code
+  (list
+   [:label {:value 'while-loop_9252}]
+   [:arg {:value 0}]
+   [:int {:value 2}]
+   [:jump-cmp
+    {:value 'while-body_9253,
+     :compare-op 155,
+     :compare-type Type/INT_TYPE}]
+   [:jump {:value 'while-exit_9254}]
+   [:label {:value 'while-body_9253}]
+   [:arg {:value 0}]
+   [:pop {:value nil}]
+   [:jump {:value 'while-loop_9252}]
+   [:label {:value 'while-exit_9254}]
+   ;[:pop {:value nil}]
+   [:arg {:value 0}]
+   [:return])})
+
 
 ;;
 (jml
