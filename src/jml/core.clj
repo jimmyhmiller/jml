@@ -474,18 +474,12 @@
      (array-store a 0 1)
      (while (< (array-load a 0) i)
         242
-       (print (array-load a 0))
-       (array-store  a  0 (print  (mult-int (array-load a 0) 2))))                                        
+       (array-store  a  0 (print  (mult-int (array-load a 0) 2))))
 
      (array-load a 0))))
 
+#_(lang.createArray/invoke 15)
 
-
-
-(def f (future 
-         (lang.createArray/invoke 12)))
-@f
-(cancel-future f)
 
 (jml
  (defalias Type org.objectweb.asm.Type)
@@ -494,7 +488,7 @@
  (defn lang.doubleNTimes[n int int]
    (let [x 1 int
          i 0 int]
-     (while (< i n)
+     (while (<= i n)
        (print i)
        (store-local {:name "i"
                      :local-type int} (plus-int i 1))
@@ -502,7 +496,7 @@
                      :local-type int} (mult-int x 2)))
      x)))
 
-#_(lang.doubleNTimes/invoke 9)
+(lang.doubleNTimes/invoke 10)
 
 backend/fn-desc
 
@@ -705,15 +699,6 @@ backend/fn-desc
      :else nil))
 
 
- (defn lang.testGeneratingCode [gen GeneratorAdapter void]
-   (lang.generateCode/invoke gen (lang.Code/Int 42))
-   (lang.generateCode/invoke gen (lang.Code/Int 4))
-   (lang.generateCode/invoke gen (lang.Code/Print))
-   (lang.generateCode/invoke gen (lang.Code/MultInt))
-   (lang.generateCode/invoke gen (lang.Code/Print))
-   (lang.generateCode/invoke gen (lang.Code/Return)))
-
-
  (defn lang.generateCodeWithEnv
    [gen GeneratorAdapter code lang.Code env Map Map]
    (cond
@@ -729,8 +714,6 @@ backend/fn-desc
           (.get env (.-stringValue code)))
          (.put env (.-stringValue code) label)
          nil))
-
-
 
      (.equals (.-tagName code) "JumpNotEqual")
      (if (.containsKey env (.-stringValue code))
@@ -827,6 +810,19 @@ backend/fn-desc
  ;; (lang.generateAllTheCode gen code)
  ;; Make it loop over the array of code and generate with env
 
+ (defn lang.generateAllTheCode [gen GeneratorAdapter code Array/lang.Code void]
+   (let [i 0 int         
+         env (java.util.HashMap.) Map]
+     ;; TODO it would be nice to be able to call (.-length code)
+     ;; but our get-field logic only really works for enum fields fields for 2 reasons
+     ;; - type-checker looks  up field types in env using  (get-in env [:data-types owner field]) and that's only populated for our enum fields
+     ;; - we could use something like type-checker/get-static-field-type as a backup for that lookup, but clojure.reflect/reflect     ;;   doesn't find `length` as a field of java.lang.Array
+     ;; for example, below expr returns empty list
+     ;; (type-checker/get-methods-jvm (class (into-array [1])) "length" [] [])
+     ;; below fails (and we're not filtering out static members as far as I can see)
+     ;; (type-checker/get-static-field-type  (class (into-array [1])) "length")
+     (while (< i (java.lang.reflect.Array/getLength code)) 
+       (lang.generateCodeWithEnv/invoke gen (array-load code i) env))))
 
 
  (defn lang.generateInvokeMethod [writer ClassWriter
@@ -839,12 +835,43 @@ backend/fn-desc
          exceptions nil Array/Type
          gen (GeneratorAdapter.
               (plus-int Opcodes/ACC_PUBLIC Opcodes/ACC_STATIC)
-              method signature exceptions writer) GeneratorAdapter]
-    #_ (lang.generateAllTheCode/invoke gen code)
+              method signature exceptions writer) GeneratorAdapter]     
+     (lang.generateAllTheCode/invoke gen code)
      (.endMethod gen)))
+                    
+           
+                                                                              
+
+ (defn lang.defineClass [writer ClassWriter class-name String java.lang.Class]
+     (let [byteArray (.toByteArray writer) Array/byte
+           aThing nil java.lang.Object]
+       (.defineClass (clojure.lang.DynamicClassLoader.)
+                     (.replace class-name "/" ".")
+                     byteArray
+                     aThing)))
+
+                                                
+
+ (defn lang.makeFn [class-name String
+                    code Array/lang.Code
+                    returnType Type
+                    argTypes Array/Type
+                    java.lang.Class]
+   (let [writer (ClassWriter. (plus-int ClassWriter/COMPUTE_FRAMES ClassWriter/COMPUTE_MAXS)) ClassWriter]
+     (lang.initializeClass/invoke writer class-name)
+     (lang.generateDefaultConstructor/invoke writer)
+     (lang.generateInvokeMethod/invoke writer code returnType argTypes)
+     (.visitEnd writer)
+     (lang.defineClass/invoke writer class-name)))
 
 
-
+ (defn lang.testGeneratingCode [gen GeneratorAdapter void]
+   (lang.generateCode/invoke gen (lang.Code/Int 42))
+   (lang.generateCode/invoke gen (lang.Code/Int 4))
+   (lang.generateCode/invoke gen (lang.Code/Print))
+   (lang.generateCode/invoke gen (lang.Code/MultInt))
+   (lang.generateCode/invoke gen (lang.Code/Print))
+   (lang.generateCode/invoke gen (lang.Code/Return)))
 
  (defn lang.parseThatInt [s String int]
    (java.lang.Integer/parseInt s))
@@ -856,11 +883,12 @@ backend/fn-desc
      (mult-int n (lang.factorial/invoke (sub-int n 1))))))
 
 
-
-
-
-
-
+(lang.makeFn/invoke "lang.TestClassFn"
+                    (into-array lang.Code [(lang.Code/Int 42)
+                                           (lang.Code/Return)])
+                    Type/INT_TYPE
+                    (into-array Type [])
+                    )
 
 (do
 
