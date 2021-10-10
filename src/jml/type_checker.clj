@@ -17,17 +17,27 @@
                                   :expr expr
                                   :env env}))))
 
+
 (defn symbol->type [sym]
   (case sym
     void Type/VOID_TYPE
     int Type/INT_TYPE
     long Type/LONG_TYPE
     boolean Type/BOOLEAN_TYPE
-    (if (string/includes? (name sym) "<>")
-      (Type/getType (format "[L%s;"  (string/replace
-                                     (string/replace  (name sym) "<>" "")
-                                     "." "/")))
-      (Type/getType ^Class  (Class/forName (name sym))))))
+    
+    (cond (string/includes? (name sym) "<>")
+          (Type/getType (format "[L%s;"  (string/replace
+                                          (string/replace  (name sym) "<>" "")
+                                          "." "/")))
+          (and (symbol? sym) (= "Array" (namespace sym)))
+          (case (name sym)
+            "int" (Type/getType "[I")
+            "byte" (Type/getType "[B")
+            ;; TODO add other primitive types
+            (Type/getType (format "[L%s;" (string/replace (name sym) "." "/"))))
+          
+          
+          :else (Type/getType ^Class  (Class/forName (name sym))))))
 
 (defn to-type-array [syms]
   (into-array Type (map symbol->type syms)))
@@ -211,6 +221,8 @@
     ;; Need to actually be augmenting env
     :store-local (matches-type 'void context)
     :load-local (matches-type (synth context) context)
+    ;; Always work
+    :cast context
     (throw (ex-info "No matching check" {:expr expr :type type :env env}))))
 
 
@@ -254,14 +266,27 @@
     :print 'void
     :pop 'void
     :store-local 'void
+    :cast (:to-type (second expr))
     (throw (ex-info "No matching synth" {:expr expr :env env}))))
 
+
+
+(let [{:keys [return-type arg-types]} values
+      method-name "invoke"]
+  (create-method {:name method-name
+                  :arg-types arg-types
+                  :return-type return-type})
+  )
 
 
 
 
 (defn get-method-info [{:keys [env] :as context} owner-name method-name args ]
-
+#_  (println "method-info" owner-name method-name)
+ #_ (when (= owner-name 'lang.generateInvokeMethod)
+    (def context context)
+    (def args args)
+    (def values (get-in env [:functions owner-name])))
   (if-let [{:keys [return-type arg-types]} (get-in env [:functions owner-name])]
     {:method (create-method {:name method-name
                              :arg-types arg-types
@@ -366,6 +391,7 @@
                                                                            this
                                                                            method-name
                                                                            args)]
+
                          (wrap-void-types
                           (into [tag
                                  (-> attrs
@@ -443,15 +469,38 @@
                         (rest (rest (rest expr)))))
     :pop [:pop]
 
+    :store-local (let [[_ props & body] expr
+                       body-type (augment-then-synth (assoc context :expr (last body)))]
+                   (def expr expr)
+                   (def context context)
+                   (if (and (= body-type 'java.lang.Object)
+                            (not= (:local-type props) 'java.lang.Object))
+                     
+                     (into
+                      (into [:store-local props]
+                            (mapv (augment-sub-expr context)
+                                  (butlast body)))
+                      [[:cast {:from-type (symbol->type 'java.lang.Object)
+                               :to-type (symbol->type (:local-type props))}
+                        ((augment-sub-expr context) (last body))]])
+                     (into [(first expr) (second expr)]
+                           (mapv (augment-sub-expr context)
+                                 (rest (rest expr))))))
+
     (do
       (into [(first expr) (second expr)]
             (mapv (augment-sub-expr context)
                   (rest (rest expr)))))))
 
 
+(let [[_ props & body] expr]
+  (def props props)
+  (def body body))
+(def body-type (augment-then-synth (assoc context :expr (last body))))
 
 
 
+(def body)
 
 
 
@@ -525,9 +574,9 @@
                    :data-types {lang.Code {"stringValue" java.lang.String}}}})
 
 
-  (augment {:expr '[:store-local
-                    {:local-type org.objectweb.asm.Label, :name "label"}
-                    [:invoke-virtual {:name .newLabel} [:arg {:value 0}]]]
+  (augment {:expr ':store-local
+            {:local-type org.objectweb.asm.Label, :name "label"}
+            [:invoke-virtual {:name .newLabel} [:arg {:value 0}]]
             :env '{:arg-types [org.objectweb.asm.commons.GeneratorAdapter lang.Code java.util.Map]
                    :data-types {lang.Code {"stringValue" java.lang.String}}}})
 

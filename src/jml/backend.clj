@@ -13,8 +13,6 @@
 
 (def INIT (Method/getMethod "void <init>()"))
 
-(defn symbol->type [sym]
-  (Type/getType (Class/forName (name sym))))
 
 (defn generate-code! [^GeneratorAdapter gen command ]
   (let [code (second command)]
@@ -23,8 +21,8 @@
       :array-load    (.arrayLoad gen (:owner code))
       :array-store   (do
                        (.arrayStore gen (:owner code))
-                       (.visitInsn gen org.objectweb.asm.Opcodes/ACONST_NULL) ;; add nil so that we can pop from interpose, same as we do for :store-local
-                       )
+                       ;; add nil so that we can pop from interpose, same as we do for :store-local
+                       (.visitInsn gen org.objectweb.asm.Opcodes/ACONST_NULL))
       :mult-int (.math gen GeneratorAdapter/MUL Type/INT_TYPE)
 
       :plus-int
@@ -35,13 +33,16 @@
       (recur gen [:math {:op GeneratorAdapter/SUB
                          :op-type Type/INT_TYPE}])
 
+      :cast (.cast gen {:from-type code} {:to-type code})
+
       :arg
       (.loadArg ^GeneratorAdapter gen (int (:value code)))
       :math
       (.math gen (:op code) (:op-type code))
 
       :get-field
-      (.getField gen (:owner code) (:name code) (:field-type code))
+      (do (println code)
+          (.getField gen (:owner code) (:name code) (:field-type code)))
       :put-field
       (.putField gen (:owner code) (:name code) (:field-type code))
       :get-static-field
@@ -145,6 +146,7 @@
       :store-local
       (if-let [local (get env (str "local-" (:name code)))]
         (do
+          (println "local!" (:name code))
           (.storeLocal gen (:local-obj local) (:local-type code))
           (generate-code! gen [:nil])
           env)
@@ -187,7 +189,8 @@
 
 
 
-(def loader jml.decompile/load-bytecode)
+(def loader #'jml.decompile/print-and-load-bytecode)
+#_(def loader jml.decompile/load-bytecode)
 
 
 (defn make-fn [{:keys [class-name code arg-types] :as description}]

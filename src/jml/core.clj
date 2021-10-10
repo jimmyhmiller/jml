@@ -21,6 +21,7 @@
       (and (symbol? expr-type) (= "Array" (namespace expr-type)))
       (case (name expr-type)
         "int" (Type/getType "[I")
+        "byte" (Type/getType "[B")
         ;; TODO add other primitive types
         (Type/getType (format "[L%s;" (string/replace (name expr-type) "." "/"))))
 
@@ -496,9 +497,9 @@
                      :local-type int} (mult-int x 2)))
      x)))
 
-(lang.doubleNTimes/invoke 10)
+#_(lang.doubleNTimes/invoke 10)
 
-backend/fn-desc
+#_backend/fn-desc
 
 (backend/make-fn
  {:type :fn,
@@ -699,19 +700,17 @@ backend/fn-desc
      :else nil))
 
 
+
  (defn lang.generateCodeWithEnv
    [gen GeneratorAdapter code lang.Code env Map Map]
    (cond
      (.equals (.-tagName code) "Label")
      (if (.containsKey env (.-stringValue code))
-       (.mark
-        gen
-        (.get env (.-stringValue code)))
+       (let [label (.get env (.-stringValue code)) Label]
+         (.mark gen label))
 
        (let [label (.newLabel gen) Label]
-         (.mark
-          gen
-          (.get env (.-stringValue code)))
+         (.mark gen label)
          (.put env (.-stringValue code) label)
          nil))
 
@@ -738,9 +737,8 @@ backend/fn-desc
 
      (.equals (.-tagName code) "JumpCompare")
      (if (.containsKey env (.-stringValue code))
-       (do
-         ;; Bug in type checker that this passes
-         (.ifCmp gen (.-compareType code) (.-compareOp code) (.get env (.-stringValue code)))
+       (let [label (.get env (.-stringValue code)) Label]
+         (.ifCmp gen (.-compareType code) (.-compareOp code) label)
          nil)
        (let [label (.newLabel gen) Label]
          (.ifCmp gen (.-compareType code) (.-compareOp code) label)
@@ -750,9 +748,8 @@ backend/fn-desc
 
      (.equals (.-tagName code) "Jump")
      (if (.containsKey env (.-stringValue code))
-       (.goTo
-        gen
-        (.get env (.-stringValue code)))
+       (let [label (.get env (.-stringValue code)) Label]
+         (.goTo gen label))
        (let [label (.newLabel gen) Label]
          (.goTo gen label)
          (.put env (.-stringValue code) label)
@@ -782,6 +779,7 @@ backend/fn-desc
      :else
      (lang.generateCode/invoke gen code))
    env)
+
 
 
 
@@ -821,8 +819,10 @@ backend/fn-desc
      ;; (type-checker/get-methods-jvm (class (into-array [1])) "length" [] [])
      ;; below fails (and we're not filtering out static members as far as I can see)
      ;; (type-checker/get-static-field-type  (class (into-array [1])) "length")
-     (while (< i (java.lang.reflect.Array/getLength code)) 
-       (lang.generateCodeWithEnv/invoke gen (array-load code i) env))))
+     (while (< i (sub-int (java.lang.reflect.Array/getLength code) 1))
+       (print i)
+       (lang.generateCodeWithEnv/invoke gen (array-load code i) env)
+       (let [i (plus-int i 1) int]))))
 
 
  (defn lang.generateInvokeMethod [writer ClassWriter
@@ -850,7 +850,6 @@ backend/fn-desc
                      byteArray
                      aThing)))
 
-                                                
 
  (defn lang.makeFn [class-name String
                     code Array/lang.Code
@@ -883,12 +882,16 @@ backend/fn-desc
      (mult-int n (lang.factorial/invoke (sub-int n 1))))))
 
 
-(lang.makeFn/invoke "lang.TestClassFn"
-                    (into-array lang.Code [(lang.Code/Int 42)
+
+(lang.makeFn/invoke "lang/TestClassFn"
+                    (into-array lang.Code [(lang.Code/Int 41)
                                            (lang.Code/Return)])
                     Type/INT_TYPE
                     (into-array Type [])
                     )
+
+
+(lang.TestClassFn/invoke)
 
 (do
 
