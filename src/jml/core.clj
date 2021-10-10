@@ -49,18 +49,25 @@
 
 ;; TODO: get rid of this
 (defn resolve-props-type [props]
-
   (if (map? props)
-
     (let [{:keys [type owner field-type result-type method local-type]} props]
       (cond-> props
         type  (update :type resolve-type)
         local-type (update :local-type resolve-type)
         owner (update :owner resolve-type)
         field-type (update :field-type resolve-type)))
-
     props))
 
+(defn negate-op-type [op]
+  (cond
+    (= op GeneratorAdapter/EQ) GeneratorAdapter/NE
+    (= op GeneratorAdapter/NE) GeneratorAdapter/EQ
+    (= op GeneratorAdapter/GT) GeneratorAdapter/LT
+    (= op GeneratorAdapter/LT) GeneratorAdapter/GT
+    (= op GeneratorAdapter/GE) GeneratorAdapter/LE
+    (= op GeneratorAdapter/LE) GeneratorAdapter/GE
+    (= op :unknown) :unknown
+    :else (throw (ex-info "Unexpected op to negate " {:op op}))))
 
 (defn cmp-op-type [op]
   (case op
@@ -115,29 +122,24 @@
 (defn desugar-while [[tag _ pred & body :as node]]
   (if (= tag :while)
     (let [loop-label (gensym "while-loop_")
-          body-label (gensym "while-body_")
           exit-label (gensym "while-exit_")
           {:keys [compare-op compare-type
-                  arg1 arg2]}     (resolve-cmp-op pred)]     
-      (concat [
-               [:label {:value loop-label}]
+                  arg1 arg2]}     (resolve-cmp-op pred)]
+      (concat [[:label {:value loop-label}]
                arg1
                arg2
-               [:jump-cmp {:value body-label
-                           :compare-op compare-op
-                           :compare-type compare-type}] ;; :jump-not-equal to exit 
-               [:jump {:value exit-label}]
-               [:label {:value body-label}]]
-              
+               [:jump-cmp {:value exit-label
+                             ;; doing (not compare-op) because we really want :jump-not-equal, not :jump-equal
+                             :compare-op (negate-op-type compare-op)
+                             :compare-type compare-type}]]
               [(-> (interpose [:pop] body)
                    vec
                    ;; TODO reconsider this, I'm assuming purely side effecting while loops,
                    ;; i.e. we need to pop last expression from the stack as we won't be consuming it in any way
-                   (conj [:pop]))] 
+                   (conj [:pop]))]
               [[:jump {:value loop-label}]
                [:label {:value exit-label}]
-               [:nil]])
-      )
+               [:nil]]))
     node))
 
 
@@ -489,13 +491,19 @@
  (defalias Type org.objectweb.asm.Type)
  (defalias Class java.lang.Class)
 
- (defn lang.createArrayT1 [i int int]   
-   (while (< i 25)
-     (print (mult-int i 2)))
-   
-   i))
-#_
-(lang.createArrayT1/invoke 23)
+ (defn lang.doubleNTimes[n int int]
+   (let [x 1 int
+         i 0 int]
+     (while (< i n)
+       (print i)
+       (store-local {:name "i"
+                     :local-type int} (plus-int i 1))
+       (store-local {:name "x"
+                     :local-type int} (mult-int x 2)))
+     x)))
+
+#_(lang.doubleNTimes/invoke 9)
+
 backend/fn-desc
 
 (backend/make-fn
