@@ -63,10 +63,10 @@
   (cond
     (= op GeneratorAdapter/EQ) GeneratorAdapter/NE
     (= op GeneratorAdapter/NE) GeneratorAdapter/EQ
-    (= op GeneratorAdapter/GT) GeneratorAdapter/LT
-    (= op GeneratorAdapter/LT) GeneratorAdapter/GT
-    (= op GeneratorAdapter/GE) GeneratorAdapter/LE
-    (= op GeneratorAdapter/LE) GeneratorAdapter/GE
+    (= op GeneratorAdapter/GT) GeneratorAdapter/LE
+    (= op GeneratorAdapter/LT) GeneratorAdapter/GE
+    (= op GeneratorAdapter/GE) GeneratorAdapter/LT
+    (= op GeneratorAdapter/LE) GeneratorAdapter/GT
     (= op :unknown) :unknown
     :else (throw (ex-info "Unexpected op to negate " {:op op}))))
 
@@ -819,7 +819,8 @@
      ;; (type-checker/get-methods-jvm (class (into-array [1])) "length" [] [])
      ;; below fails (and we're not filtering out static members as far as I can see)
      ;; (type-checker/get-static-field-type  (class (into-array [1])) "length")
-     (while (< i (sub-int (java.lang.reflect.Array/getLength code) 1))
+     (while (< i (java.lang.reflect.Array/getLength code))
+       (print i)
        (lang.generateCodeWithEnv/invoke gen (array-load code i) env)
        (let [i (plus-int i 1) int]))))
 
@@ -884,18 +885,19 @@
 
 
 
-(lang.makeFn/invoke "lang/TestClassFn"
-                    (into-array lang.Code  [(lang.Code/Int 42)
-                                            (lang.Code/Int 4)
-                                            (lang.Code/Print)
-                                            (lang.Code/MultInt)
-                                            (lang.Code/Print)
-                                            (lang.Code/Return)])
-                    Type/INT_TYPE
-                    (into-array Type []))
+(do
+  (lang.makeFn/invoke "lang/TestClassFn"
+                        (into-array lang.Code  [(lang.Code/Int 42)
+                                                (lang.Code/Arg 0)
+                                                (lang.Code/Print)
+                                                (lang.Code/MultInt)
+                                                (lang.Code/Print)
+                                                (lang.Code/Return)])
+                        Type/INT_TYPE
+                        (into-array Type [Type/INT_TYPE]))
 
 
-(lang.TestClassFn/invoke)
+    (lang.TestClassFn/invoke 5))
 
 (do
 

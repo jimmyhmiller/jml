@@ -273,22 +273,10 @@
 
 
 
-(let [{:keys [return-type arg-types]} values
-      method-name "invoke"]
-  (create-method {:name method-name
-                  :arg-types arg-types
-                  :return-type return-type})
-  )
-
 
 
 
 (defn get-method-info [{:keys [env] :as context} owner-name method-name args ]
-#_  (println "method-info" owner-name method-name)
- #_ (when (= owner-name 'lang.generateInvokeMethod)
-    (def context context)
-    (def args args)
-    (def values (get-in env [:functions owner-name])))
   (if-let [{:keys [return-type arg-types]} (get-in env [:functions owner-name])]
     {:method (create-method {:name method-name
                              :arg-types arg-types
@@ -493,21 +481,6 @@
       (into [(first expr) (second expr)]
             (mapv (augment-sub-expr context)
                   (rest (rest expr)))))))
-
-
-(let [[_ props & body] expr]
-  (def props props)
-  (def body body))
-(def body-type (augment-then-synth (assoc context :expr (last body))))
-
-
-
-(def body)
-
-
-
-
-
 
 
 
