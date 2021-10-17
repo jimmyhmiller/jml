@@ -820,7 +820,6 @@
      ;; below fails (and we're not filtering out static members as far as I can see)
      ;; (type-checker/get-static-field-type  (class (into-array [1])) "length")
      (while (< i (sub-int (java.lang.reflect.Array/getLength code) 1))
-       (print i)
        (lang.generateCodeWithEnv/invoke gen (array-load code i) env)
        (let [i (plus-int i 1) int]))))
 
@@ -883,12 +882,17 @@
 
 
 
+
+
 (lang.makeFn/invoke "lang/TestClassFn"
-                    (into-array lang.Code [(lang.Code/Int 41)
-                                           (lang.Code/Return)])
+                    (into-array lang.Code  [(lang.Code/Int 42)
+                                            (lang.Code/Int 4)
+                                            (lang.Code/Print)
+                                            (lang.Code/MultInt)
+                                            (lang.Code/Print)
+                                            (lang.Code/Return)])
                     Type/INT_TYPE
-                    (into-array Type [])
-                    )
+                    (into-array Type []))
 
 
 (lang.TestClassFn/invoke)

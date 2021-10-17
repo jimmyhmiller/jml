@@ -33,7 +33,7 @@
       (recur gen [:math {:op GeneratorAdapter/SUB
                          :op-type Type/INT_TYPE}])
 
-      :cast (.cast gen {:from-type code} {:to-type code})
+      :cast (.checkCast gen  (:to-type code))
 
       :arg
       (.loadArg ^GeneratorAdapter gen (int (:value code)))
@@ -47,6 +47,7 @@
       (.putField gen (:owner code) (:name code) (:field-type code))
       :get-static-field
       (try
+        (println "static-field" code)
         (.getStatic gen (:owner code) (:name code) (:field-type code))
         (catch Exception e
           (throw (ex-info "Error" {:code code} e))))

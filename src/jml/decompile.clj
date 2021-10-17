@@ -39,7 +39,8 @@
 
 (defn print-and-load-bytecode [writer class-name]
   (let [byteArray (.toByteArray ^ClassWriter writer)]
-    (jml.decompile/to-bytecode byteArray class-name)
+    (when (= class-name "lang/defineClass")
+      (jml.decompile/to-bytecode byteArray class-name))
     (.defineClass ^clojure.lang.DynamicClassLoader
                   (clojure.lang.DynamicClassLoader.)
                   (.replace ^String class-name \/ \.)

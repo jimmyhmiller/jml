@@ -26,9 +26,11 @@
     boolean Type/BOOLEAN_TYPE
     
     (cond (string/includes? (name sym) "<>")
-          (Type/getType (format "[L%s;"  (string/replace
-                                          (string/replace  (name sym) "<>" "")
-                                          "." "/")))
+          (case (name sym)
+            "byte<>" (Type/getType "[B")
+            (Type/getType (format "[L%s;"  (string/replace
+                                            (string/replace  (name sym) "<>" "")
+                                            "." "/"))))
           (and (symbol? sym) (= "Array" (namespace sym)))
           (case (name sym)
             "int" (Type/getType "[I")
