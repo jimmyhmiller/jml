@@ -227,6 +227,9 @@
              (cond
                (and (seq? x) (= (first x) 'arg))
                (reduced [:arg {:value (second x)}])
+               (and (seq? x) (= (first x) 'set!))
+               ;; piggybacking on the fact that desugar-let replaced all references to local bindings with (load-local {:name "x"})              ;; we can thus just grab the {:name "x"} part.
+               [:store-local    (second (second x))  (first (rest (rest x)))]
                (and (seq? x) (symbol? (first x)) (= (first x) 'cond))
                (de-sexpr (expand-cond x))
                (and (seq? x) (symbol? (first x)) (= (first x) 'do))
@@ -359,7 +362,9 @@
                                            :env env})))
                         (= :store-local (first e))))
               (map (fn [[_ props & _]]
-                     [(:name props) (de-alias-type  (:local-type props) env)]))
+                     (when (:local-type props)
+                       [(:name props) (de-alias-type  (:local-type props) env)])))
+              (remove nil?)
               (into {}))))
 
 
@@ -501,29 +506,35 @@
 
 #_backend/fn-desc
 
-(backend/make-fn
- {:type :fn,
-  :class-name "lang/createArrayT2",
-  :arg-types [Type/INT_TYPE]
-  :return-type Type/INT_TYPE
-  :code
-  (list
-   [:label {:value 'while-loop_9252}]
-   [:arg {:value 0}]
-   [:int {:value 2}]
-   [:jump-cmp
-    {:value 'while-body_9253,
-     :compare-op 155,
-     :compare-type Type/INT_TYPE}]
-   [:jump {:value 'while-exit_9254}]
-   [:label {:value 'while-body_9253}]
-   [:arg {:value 0}]
-   [:pop {:value nil}]
-   [:jump {:value 'while-loop_9252}]
-   [:label {:value 'while-exit_9254}]
-   ;[:pop {:value nil}]
-   [:arg {:value 0}]
-   [:return])})
+(jml
+ (defn lang.loopTest [ n int int]
+   (let [i 0 int]
+
+     (while (< i n)
+       (print i)
+
+       (store-local {:name "i"
+                     :local-type int}
+                    (plus-int i 1)) #_
+       (let [i (plus-int i 1) int]))
+     i)))
+
+
+(lang.loopTest/invoke 5)
+
+
+(jml
+ (defn lang.setLoopTest [ n int int]
+   (let [i 0 int]
+
+     (while (< i n)
+       (print i)
+       (set! i (plus-int i 1)))
+     i)))
+
+(lang.setLoopTest/invoke 10)
+
+
 
 
 ;;
@@ -809,7 +820,7 @@
  ;; Make it loop over the array of code and generate with env
 
  (defn lang.generateAllTheCode [gen GeneratorAdapter code Array/lang.Code void]
-   (let [i 0 int         
+   (let [i 0 int
          env (java.util.HashMap.) Map]
      ;; TODO it would be nice to be able to call (.-length code)
      ;; but our get-field logic only really works for enum fields fields for 2 reasons
@@ -820,7 +831,6 @@
      ;; below fails (and we're not filtering out static members as far as I can see)
      ;; (type-checker/get-static-field-type  (class (into-array [1])) "length")
      (while (< i (java.lang.reflect.Array/getLength code))
-       (print i)
        (lang.generateCodeWithEnv/invoke gen (array-load code i) env)
        (let [i (plus-int i 1) int]))))
 
@@ -835,12 +845,12 @@
          exceptions nil Array/Type
          gen (GeneratorAdapter.
               (plus-int Opcodes/ACC_PUBLIC Opcodes/ACC_STATIC)
-              method signature exceptions writer) GeneratorAdapter]     
+              method signature exceptions writer) GeneratorAdapter]
      (lang.generateAllTheCode/invoke gen code)
      (.endMethod gen)))
-                    
-           
-                                                                              
+
+
+
 
  (defn lang.defineClass [writer ClassWriter class-name String java.lang.Class]
      (let [byteArray (.toByteArray writer) Array/byte

@@ -460,12 +460,11 @@
     :pop [:pop]
 
     :store-local (let [[_ props & body] expr
-                       body-type (augment-then-synth (assoc context :expr (last body)))]
-                   (def expr expr)
-                   (def context context)
+                       body-type (augment-then-synth (assoc context :expr (last body)))
+                       local-type (if (:local-type props) (:local-type props) body-type)
+                       props (assoc (second expr) :local-type local-type)]
                    (if (and (= body-type 'java.lang.Object)
                             (not= (:local-type props) 'java.lang.Object))
-                     
                      (into
                       (into [:store-local props]
                             (mapv (augment-sub-expr context)
@@ -473,7 +472,7 @@
                       [[:cast {:from-type (symbol->type 'java.lang.Object)
                                :to-type (symbol->type (:local-type props))}
                         ((augment-sub-expr context) (last body))]])
-                     (into [(first expr) (second expr)]
+                     (into [(first expr) props]
                            (mapv (augment-sub-expr context)
                                  (rest (rest expr))))))
 
