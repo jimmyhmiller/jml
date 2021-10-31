@@ -188,14 +188,35 @@
     (concat '(do) locals body)))
 
 
+(declare desugar-foreach)
+
 (defn replace-let-exprs [expr]
   (walk/postwalk
    (fn [x]
-     (if (and (seq? x) (symbol? (first x)) (=  (first x) 'let))
+     (cond
+       (and (seq? x) (symbol? (first x)) (= (first x) 'foreach))
+       (desugar-foreach x)
+       (and (seq? x) (symbol? (first x)) (=  (first x) 'let))
        (desugar-let x)
-       x))
+       :else x))
    expr))
 
+(defn desugar-foreach [[_ [x xs ty] & body]]
+  (let [loop-index-sym (gensym "i")
+        arr-sym (gensym "arr")
+        loop-pred (list '<  loop-index-sym (list 'array-length arr-sym))]
+    (replace-let-exprs
+     (concat '(let)  [[loop-index-sym 0 'int
+                       arr-sym xs (symbol "Array" (name ty))                   ]]
+             (list (concat (list  'while loop-pred)
+
+                           (list (concat '(let) [[x (list 'array-load arr-sym loop-index-sym) ty]]
+                                         (concat body
+                                                 [(list 'set! loop-index-sym
+                                                        (list 'plus-int loop-index-sym 1))])))))))))
+
+#_(desugar-foreach '(foreach [y (new-array int 10) int]
+                             (print y)))
 
 
 
@@ -504,23 +525,21 @@
 
 #_(lang.doubleNTimes/invoke 10)
 
-#_backend/fn-desc
 
 (jml
- (defn lang.loopTest [ n int int]
-   (let [i 0 int]
-
+ (defn lang.foreachTest [n int void]
+   (let [xs (new-array int n) Array/int
+         i 0 int]
      (while (< i n)
-       (print i)
+              (array-store xs i i)
+             ; (print (array-load xs i))
+              (set! i (plus-int i 1)))
+     (foreach [x xs int]
 
-       (store-local {:name "i"
-                     :local-type int}
-                    (plus-int i 1)) #_
-       (let [i (plus-int i 1) int]))
-     i)))
+              (print x)))))
 
+(lang.foreachTest/invoke 10)
 
-(lang.loopTest/invoke 5)
 
 
 (jml
@@ -816,23 +835,10 @@
      (.visit writer Opcodes/V1_8 Opcodes/ACC_PUBLIC className signature "java/lang/Object" interfaces)))
 
 
- ;; (lang.generateAllTheCode gen code)
- ;; Make it loop over the array of code and generate with env
-
  (defn lang.generateAllTheCode [gen GeneratorAdapter code Array/lang.Code void]
-   (let [i 0 int
-         env (java.util.HashMap.) Map]
-     ;; TODO it would be nice to be able to call (.-length code)
-     ;; but our get-field logic only really works for enum fields fields for 2 reasons
-     ;; - type-checker looks  up field types in env using  (get-in env [:data-types owner field]) and that's only populated for our enum fields
-     ;; - we could use something like type-checker/get-static-field-type as a backup for that lookup, but clojure.reflect/reflect     ;;   doesn't find `length` as a field of java.lang.Array
-     ;; for example, below expr returns empty list
-     ;; (type-checker/get-methods-jvm (class (into-array [1])) "length" [] [])
-     ;; below fails (and we're not filtering out static members as far as I can see)
-     ;; (type-checker/get-static-field-type  (class (into-array [1])) "length")
-     (while (< i (java.lang.reflect.Array/getLength code))
-       (lang.generateCodeWithEnv/invoke gen (array-load code i) env)
-       (set! i (plus-int i 1)))))
+   (let [env (java.util.HashMap.) Map]
+     (foreach [c code lang.Code]
+              (lang.generateCodeWithEnv/invoke gen c env))))
 
 
  (defn lang.generateInvokeMethod [writer ClassWriter

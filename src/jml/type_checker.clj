@@ -144,6 +144,7 @@
     :dup (matches-type 'void context)
     :new (matches-type (:owner (second expr)) context)
     :new-array (matches-type (synth context) context)
+    :array-length (matches-type 'int context)
     :array-store (do ;; check if the first argument's type if Array of right type (:owner (second expr))
                    (matches-type (synth (assoc context :expr (nth expr 2)))
                                  (assoc context :type
@@ -242,6 +243,7 @@
     :new-array (symbol "Array" (name (:owner (second expr))))
     :array-store 'void
     :array-load  (:owner (second expr))
+    :array-length 'int
     :arg (get-in env [:arg-types (:value (second expr))])
     :get-field (get-field-type (:owner (second expr)) (:name (second expr)) env)
     :invoke-virtual (if-let [return-type (:return-type (second expr))]

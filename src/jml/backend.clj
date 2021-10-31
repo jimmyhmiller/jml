@@ -18,6 +18,7 @@
   (let [code (second command)]
     (case (first command)
       :new-array     (.newArray gen (:owner code))
+      :array-length  (.arrayLength gen)
       :array-load    (.arrayLoad gen (:owner code))
       :array-store   (do
                        (.arrayStore gen (:owner code))
