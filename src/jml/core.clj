@@ -832,7 +832,7 @@
      ;; (type-checker/get-static-field-type  (class (into-array [1])) "length")
      (while (< i (java.lang.reflect.Array/getLength code))
        (lang.generateCodeWithEnv/invoke gen (array-load code i) env)
-       (let [i (plus-int i 1) int]))))
+       (set! i (plus-int i 1)))))
 
 
  (defn lang.generateInvokeMethod [writer ClassWriter
