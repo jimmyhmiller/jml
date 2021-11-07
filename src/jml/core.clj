@@ -590,6 +590,17 @@
 
 (lang2.MyAwesomeCode/invoke)
 
+
+(jml
+ (defalias Type org.objectweb.asm.Type)
+
+ (defenum lang.Field
+   (Field name String
+          type Type))
+
+ (defn lang.fieldToType [f lang.Field Type]
+   (.-type f)))
+
 (jml
 
 
@@ -602,6 +613,10 @@
  (defalias Method org.objectweb.asm.commons.Method)
  (defalias String java.lang.String)
  (defalias Map java.util.Map)
+
+ (defenum lang.Field
+   (Field name String
+          type Type))
 
  (defenum lang.Code
    MultInt
@@ -879,6 +894,79 @@
      (.visitEnd writer)
      (lang.defineClass/invoke writer class-name)))
 
+ (defn lang.makeField [writer ClassWriter
+                       field lang.Field
+                       void]
+   (let [signature nil String
+         value nil java.lang.Object
+         fieldViz (.visitField writer Opcodes/ACC_PUBLIC (.-name field)
+                            (.getDescriptor (.-type field))
+                            signature value) org.objectweb.asm.FieldVisitor]
+     (.visitEnd fieldViz)))
+
+ (defn lang.makeFieldAssignment [gen GeneratorAdapter
+                                 this-type Type
+                                 index int
+                                 field lang.Field
+                                 void]
+   (.loadThis gen)
+   (.loadArg gen index)
+   (.putField gen this-type (.-name field) (.-type field)))
+
+ (defn lang.makeFieldAssignmentOnStack [gen GeneratorAdapter
+                                        this-type Type
+                                        index int
+                                        field lang.Field
+                                        void]
+   (.dup gen)
+   (.loadArg gen index)
+   (.putField gen this-type (.-name field) (.-type field)))
+
+ (defn lang.fieldsToTypes [fields Array/lang.Field Array/Type]
+   (let [types (new-array Type (array-length fields)) Array/Type
+         i 0 int]
+     (foreach [field fields lang.Field]
+              (array-store types i (.-type field))
+              (set! i (plus-int i 1)))
+     types))
+
+ (defn lang.makeStructConstructor [writer ClassWriter
+                                   class-name String
+                                   fields Array/lang.Field
+                                   void]
+   (let [INIT (Method/getMethod "void <init>()") Method
+         signature nil String
+         exceptions nil java.lang.Object
+         ctor-method (Method. "<init>" Type/VOID_TYPE (lang.fieldsToTypes/invoke fields)) Method
+         gen (GeneratorAdapter.
+               Opcodes/ACC_PUBLIC
+              ctor-method signature exceptions writer) GeneratorAdapter
+         this-type (Type/getType (.concat (.concat "L" class-name)
+                                          ";")) Type]
+     (.visitCode gen)
+     (.loadThis gen)
+     (.invokeConstructor gen (Type/getType (Class/forName "java.lang.Object")) INIT)
+     (let [i 0 int]
+       (foreach [f fields lang.Field]
+                (lang.makeFieldAssignment/invoke gen this-type i f)
+                (set! i (plus-int i 1))))
+
+     (.returnValue gen)
+     (.endMethod gen)))
+
+
+ (defn lang.makeStruct [class-name String
+                        fields Array/lang.Field
+                        String]
+   (let [writer (ClassWriter. (plus-int  ClassWriter/COMPUTE_FRAMES ClassWriter/COMPUTE_MAXS)) ClassWriter]
+     (lang.initializeClass/invoke writer class-name)
+     (lang.generateDefaultConstructor/invoke writer)
+     (foreach [f fields lang.Field]
+              (lang.makeField/invoke writer f))
+     (lang.makeStructConstructor/invoke writer class-name fields)
+     (.visitEnd writer)
+     (jml.decompile$print_and_load_bytecode/invokeStatic writer class-name)
+     class-name))
 
  (defn lang.testGeneratingCode [gen GeneratorAdapter void]
    (lang.generateCode/invoke gen (lang.Code/Int 42))
@@ -898,6 +986,8 @@
      (mult-int n (lang.factorial/invoke (sub-int n 1))))))
 
 
+(lang.makeStruct/invoke "lang2/MyTestStruct"
+                        (into-array lang.Field [(lang.Field/Field "x" Type/INT_TYPE)]))
 
 
 
