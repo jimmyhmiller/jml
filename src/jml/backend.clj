@@ -191,8 +191,7 @@
 #_(def loader #'jml.decompile/print-and-load-bytecode)
 (def loader jml.decompile/load-bytecode)
 
-(defn make-fn [{:keys [class-name code arg-types] :as description}]
-  (def make-fn-arg description)
+(defn make-fn [{:keys [class-name code arg-types] :as description}]  
   (let [writer (ClassWriter. (int (+ ClassWriter/COMPUTE_FRAMES ClassWriter/COMPUTE_MAXS)))]
     (initialize-class writer class-name)
     (generate-default-constructor writer)
@@ -264,7 +263,7 @@
   (.dup gen))
 
 
-(defn make-table-switch-gen [^GeneratorAdapter gen {:keys [class-name variants]}]
+#_(defn make-table-switch-gen [^GeneratorAdapter gen {:keys [class-name variants]}]
   (let [variants-indexed (into {} (map-indexed vector variants))
         this-type (Type/getType (str "L" class-name ";"))
         sb-type (Type/getType (Class/forName "java.lang.StringBuilder"))
@@ -292,7 +291,7 @@
         (.returnValue gen)))))
 
 
-(defn make-to-string [writer {:keys [class-name variants] :as description}]
+#_(defn make-to-string [writer {:keys [class-name variants] :as description}]
   (let [this-type (Type/getType (str "L" class-name ";"))
         method (Method. "toString" (Type/getType String) (into-array Type []))
         gen (GeneratorAdapter. (int (+ Opcodes/ACC_PUBLIC)) method nil nil writer)
@@ -300,7 +299,7 @@
 
     (.visitCode gen)
     (.loadThis gen)
-    (.getField gen this-type "tag" Type/INT_TYPE)
+    (.getField gen this-type "tagName" (Type/getType String))
 
     (.tableSwitch gen
                   (int-array (range (count variants)))
@@ -311,7 +310,7 @@
 
 
 
-(defn make-enum-factory [writer class-name {:keys [name fields tagName tag]}]
+(defn make-enum-factory [writer class-name {:keys [name fields]}]
   (let [ ;; This is probably not always true, especially with namespacing.
         this-type (Type/getType (str "L" class-name ";"))
         method (Method. name this-type (into-array Type (map :type fields)))
@@ -322,11 +321,7 @@
     (.invokeConstructor gen this-type INIT)
 
     (.dup gen)
-    (.push gen (int tag))
-    (.putField gen this-type "tag" Type/INT_TYPE)
-
-    (.dup gen)
-    (.push gen ^String tagName)
+    (.push gen ^String name)
     (.putField gen this-type "tagName" (Type/getType String))
 
 
@@ -335,20 +330,15 @@
     (.endMethod ^GeneratorAdapter gen)))
 
 
-(defn make-enum-variant [writer class-name tag {:keys [name fields] :as enum}]
-  (make-enum-factory writer class-name (assoc enum :tag tag :tagName name)))
-
-
 ;; NOTE: All names type combinations must be unique
 (defn make-enum [{:keys [class-name variants] :as description}]
   (let [writer (ClassWriter. (int (+ ClassWriter/COMPUTE_FRAMES ClassWriter/COMPUTE_MAXS)))]
     (initialize-class writer class-name)
-    (generate-default-constructor writer)
-    (make-field writer {:name "tag" :type Type/INT_TYPE})
+    (generate-default-constructor writer)    
     (make-field writer {:name "tagName" :type (Type/getType String)})
-    (make-to-string writer description)
+    #_(make-to-string writer description)
     (run! (partial make-field writer) (set (mapcat :fields variants)))
-    (run-indexed! (partial make-enum-variant writer class-name) variants)
+    (run! (partial make-enum-factory writer class-name) variants)
     (.visitEnd writer)
     ;; Should have a way to return class and not print
     (loader writer class-name)))

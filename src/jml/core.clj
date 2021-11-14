@@ -10,6 +10,9 @@
            [org.objectweb.asm.commons Method GeneratorAdapter]))
 
 
+(defn array-type [expr-type]
+  (Type/getType
+   (format "[L%s;" (string/replace (name expr-type) "." "/"))))
 
 ;; TODO: get rid of this
 (defn resolve-type [expr-type]
@@ -23,7 +26,7 @@
         "int" (Type/getType "[I")
         "byte" (Type/getType "[B")
         ;; TODO add other primitive types
-        (Type/getType (format "[L%s;" (string/replace (name expr-type) "." "/"))))
+         (array-type expr-type))
 
       (or (symbol? expr-type) (keyword? expr-type) (string? expr-type))
       (case (symbol expr-type)
@@ -602,8 +605,6 @@
    (.-type f)))
 
 (jml
-
-
  (defalias GeneratorAdapter org.objectweb.asm.commons.GeneratorAdapter)
  (defalias ClassWriter  org.objectweb.asm.ClassWriter)
  (defalias Type org.objectweb.asm.Type)
@@ -617,6 +618,10 @@
  (defenum lang.Field
    (Field name String
           type Type))
+
+ (defenum lang.EnumVariant
+   (Variant name String
+            fields Array/lang.Field))
 
  (defenum lang.Code
    MultInt
@@ -968,6 +973,59 @@
      (jml.decompile$print_and_load_bytecode/invokeStatic writer class-name)
      class-name))
 
+ (defn lang.makeEnumFactory [writer ClassWriter
+                             class-name String
+                             name String
+                             fields Array/lang.Field
+                             void]
+   (let [INIT (Method/getMethod "void <init>()") Method
+         this-type (Type/getType (.concat (.concat "L" class-name)
+                                          ";")) Type
+         method (Method. name this-type (lang.fieldsToTypes/invoke fields)) Method
+         signature nil String
+         exceptions nil java.lang.Object
+         gen (GeneratorAdapter. (plus-int Opcodes/ACC_PUBLIC Opcodes/ACC_STATIC) method signature exceptions writer) GeneratorAdapter]
+     (.visitCode gen)
+     (.newInstance gen this-type)
+     (.dup gen)
+     (.invokeConstructor gen this-type INIT)
+
+     ;;adding tagName field
+     (.dup gen)
+     (.push gen name)
+     (.putField gen this-type "tagName" (Type/getType (Class/forName "java.lang.String")))
+
+     (let [i 0 int]
+       (foreach [f fields lang.Field]
+                (lang.makeFieldAssignmentOnStack/invoke gen this-type i f)
+                (set! i (plus-int i 1))))
+     (.returnValue gen)
+     (.endMethod gen)))
+
+ (defn lang.makeEnum [class-name String variants Array/lang.EnumVariant void]
+   (let [writer (ClassWriter. (plus-int ClassWriter/COMPUTE_FRAMES ClassWriter/COMPUTE_MAXS)) ClassWriter]
+     (lang.initializeClass/invoke writer class-name)
+     (lang.generateDefaultConstructor/invoke writer)
+     (lang.makeField/invoke writer (lang.Field/Field "tagName" (Type/getType (Class/forName "java.lang.String"))))
+     ;; TODO make-to-string
+
+     (let [seen-fields (java.util.HashSet.) java.util.HashSet]
+       (foreach [v variants lang.EnumVariant]
+                ;; TODO use set to remove duplicate fields
+
+                (foreach [f (.-fields v) lang.Field]
+                         (if (.contains seen-fields (.-name f))
+                           nil
+                           (do
+                             (.add seen-fields (.-name f))
+                             (lang.makeField/invoke writer f))))))
+
+     (foreach [v variants lang.EnumVariant]
+              (lang.makeEnumFactory/invoke writer class-name (.-name v) (.-fields v)))
+     (.visitEnd writer)
+     (jml.decompile$print_and_load_bytecode/invokeStatic writer class-name)
+     nil))
+
  (defn lang.testGeneratingCode [gen GeneratorAdapter void]
    (lang.generateCode/invoke gen (lang.Code/Int 42))
    (lang.generateCode/invoke gen (lang.Code/Int 4))
@@ -990,6 +1048,39 @@
                         (into-array lang.Field [(lang.Field/Field "x" Type/INT_TYPE)]))
 
 
+(lang.makeEnum/invoke "lang2/Field"
+                      (into-array lang.EnumVariant
+                                  [(lang.EnumVariant/Variant
+                                    "Field"
+                                    (into-array lang.Field
+                                                [(lang.Field/Field "name" (Type/getType String))
+                                                 (lang.Field/Field "type" (Type/getType Type))]))]))
+
+
+
+(lang.makeEnum/invoke "lang2/EnumVariant"
+                      (into-array lang.EnumVariant
+                                  [(lang.EnumVariant/Variant
+                                    "Variant"
+                                    (into-array lang.Field
+                                                [(lang.Field/Field "name" (Type/getType String))
+                                                 (lang.Field/Field "fields" (array-type 'lang2.Field))]))]))
+
+
+
+[(lang2.EnumVariant/Variant
+  "Variant"
+  (into-array lang2.Field
+              [(lang2.Field/Field "name" (Type/getType String))
+               (lang2.Field/Field "fields" (array-type 'lang2.Field))]))]
+
+(lang2.EnumVariant/Variant
+ "Field"
+ (into-array lang2.Field
+             [(lang2.Field/Field "name" (Type/getType String))
+              (lang2.Field/Field "type" (Type/getType Type))]))
+
+(.-x (lang2.EnumVariant/A 23))
 
 (do
   (lang.makeFn/invoke "lang/TestClassFn"
@@ -1003,7 +1094,9 @@
                         (into-array Type [Type/INT_TYPE]))
 
 
-    (lang.TestClassFn/invoke 5))
+  (lang.TestClassFn/invoke 5))
+
+
 
 (do
 
@@ -1015,8 +1108,4 @@
 
 
 
-   (lang.factorial/invoke 5)]
-
-
-
-  )
+   (lang.factorial/invoke 5)]  )
