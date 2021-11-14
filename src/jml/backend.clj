@@ -42,13 +42,11 @@
       (.math gen (:op code) (:op-type code))
 
       :get-field
-      (do (println code)
-          (.getField gen (:owner code) (:name code) (:field-type code)))
+      (.getField gen (:owner code) (:name code) (:field-type code))
       :put-field
       (.putField gen (:owner code) (:name code) (:field-type code))
       :get-static-field
       (try
-        (println "static-field" code)
         (.getStatic gen (:owner code) (:name code) (:field-type code))
         (catch Exception e
           (throw (ex-info "Error" {:code code} e))))
@@ -148,7 +146,6 @@
       :store-local
       (if-let [local (get env (str "local-" (:name code)))]
         (do
-          (println "local!" (:name code))
           (.storeLocal gen (:local-obj local) (:local-type code))
           (generate-code! gen [:nil])
           env)
@@ -191,11 +188,11 @@
 
 
 
-(def loader #'jml.decompile/print-and-load-bytecode)
-#_(def loader jml.decompile/load-bytecode)
-
+#_(def loader #'jml.decompile/print-and-load-bytecode)
+(def loader jml.decompile/load-bytecode)
 
 (defn make-fn [{:keys [class-name code arg-types] :as description}]
+  (def make-fn-arg description)
   (let [writer (ClassWriter. (int (+ ClassWriter/COMPUTE_FRAMES ClassWriter/COMPUTE_MAXS)))]
     (initialize-class writer class-name)
     (generate-default-constructor writer)
