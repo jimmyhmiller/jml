@@ -14,7 +14,7 @@
 (def INIT (Method/getMethod "void <init>()"))
 
 
-(defn generate-code! [^GeneratorAdapter gen command ]
+(defn generate-code! [^GeneratorAdapter gen command]
   (let [code (second command)]
     (case (first command)
       :new-array     (.newArray gen (:owner code))
@@ -34,7 +34,7 @@
       (recur gen [:math {:op GeneratorAdapter/SUB
                          :op-type Type/INT_TYPE}])
 
-      :cast (.checkCast gen  (:to-type code))
+      :cast (.checkCast gen (:to-type code))
 
       :arg
       (.loadArg ^GeneratorAdapter gen (int (:value code)))
@@ -85,7 +85,7 @@
                (.invokeVirtual gen (Type/getType ^java.lang.Class
                                                  (.getGenericType (.getDeclaredField (Class/forName "java.lang.System")
                                                                                      "out")))
-                               (Method. "println" Type/VOID_TYPE  (into-array Type [Type/INT_TYPE]))))
+                               (Method. "println" Type/VOID_TYPE  (into-array Type [(Type/getType Object)]))))
       :return
       (.returnValue gen))))
 
