@@ -485,7 +485,7 @@
               defn (let [[_ fn-name & _] s-expr
                          env (process-defn-for-types s-expr env)
                          function (get-in env [:functions fn-name])]
-                     (assoc-in env [:functions fn-name]
+                     (assoc-in env [:functions-with-ir fn-name]
                                (-> function
                                    (update :arg-types (fn [arg-types]
                                                         (map #(resolve-type (de-alias-type %  env)) arg-types)))

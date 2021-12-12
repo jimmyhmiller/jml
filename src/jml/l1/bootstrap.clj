@@ -17,26 +17,6 @@
   (clojure.walk/postwalk un-objectify code))
 
 
-
-(defn make-make-fn [{:keys [class-name arg-types return-type code]}]
-  (list 'lang.makeFn/invoke
-        (string/replace class-name "lang" "lang2")
-        (list 'into-array 'lang.Code (mapv generate-code code))
-        (un-objectify return-type)
-        (list 'into-array 'Type (mapv un-objectify arg-types))))
-
-
-
-(un-objectify-vals
- (map #(mapv generate-code %)
-      (map :code
-           (filter (comp #{:fn} :type)
-                   (vals
-                    (:functions-with-ir
-                     @core/my-ir))))))
-
-
-
 (defn generate-code [command]
   (un-objectify-walk
    (let [code (second command)]
@@ -73,6 +53,28 @@
        :array-length (list 'lang.Code/ArrayLength)
        :array-load (list 'lang.Code/ArrayLoad (:owner code))  
        :array-store (list 'lang.Code/ArrayStore (:owner code))))))
+
+
+(defn make-make-fn [{:keys [class-name arg-types return-type code]}]
+  (list 'lang.makeFn/invoke
+        (string/replace class-name "lang" "lang2")
+        (list 'into-array 'lang.Code (mapv generate-code code))
+        (un-objectify return-type)
+        (list 'into-array 'Type (mapv un-objectify arg-types))))
+
+
+
+(un-objectify
+ (map #(mapv generate-code %)
+      (map :code
+           (filter (comp #{:fn} :type)
+                   (vals
+                    (:functions-with-ir
+                     @core/my-ir))))))
+
+
+
+
 
 
 
