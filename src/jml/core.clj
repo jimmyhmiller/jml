@@ -478,7 +478,6 @@
           s-exprs)
   nil)
 
-
 (defn get-ir-multiple* [s-exprs]
   (reduce (fn [env s-expr]
             (case (first s-expr)
@@ -499,16 +498,15 @@
            :aliases {}}
           s-exprs))
 
+;; Only works one jml block
+;; We could name them
+(def raw-source (atom nil))
 
 (defmacro jml [& s-exprs]
+  (reset! raw-source s-exprs)
   (run-multiple* s-exprs))
 
 
-(def my-ir (atom nil))
-
-(defmacro jml-ir [& s-exprs]
-  (reset! my-ir (get-ir-multiple* s-exprs))
-  nil)
 
 
 

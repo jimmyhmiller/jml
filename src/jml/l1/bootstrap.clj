@@ -6,6 +6,8 @@
            [org.objectweb.asm.commons Method]))
 
 
+
+
 (defn un-objectify [x]
   (cond (instance? Type x)
         (list 'Type/getType (.toString x))
@@ -63,16 +65,58 @@
         (list 'into-array 'Type (mapv un-objectify arg-types))))
 
 
+(defn make-make-fn2 [{:keys [class-name arg-types return-type code]}]
+  (list 'lang2.makeFn/invoke
+        (string/replace class-name "lang" "lang3")
+        (list 'into-array 'lang.Code (mapv generate-code code))
+        (un-objectify return-type)
+        (list 'into-array 'Type (mapv un-objectify arg-types))))
 
-(un-objectify
- (map #(mapv generate-code %)
-      (map :code
-           (filter (comp #{:fn} :type)
-                   (vals
-                    (:functions-with-ir
-                     @core/my-ir))))))
+(def example
+  "(Type/getType \"Llang/generateCode;\")
+  (Lorg/objectweb/asm/commons/GeneratorAdapter;Llang/Code;)V")
 
 
+
+(def path "./src/jml/l1/compilerl1.clj")
+(def compile-file (slurp path))
+(spit path
+      (str
+       (subs compile-file 0 (+ (string/index-of compile-file ";; CODE") (count ";; CODE")))
+       "\n\n"
+       (string/replace 
+        (string/join "\n\n"
+                     (map (fn [function]
+                            (with-out-str
+                              (clojure.pprint/pprint function)))
+                          (map make-make-fn
+                               (filter (comp #{:fn} :type)
+                                       (vals
+                                        (:functions-with-ir
+                                         (core/get-ir-multiple*
+                                          @core/raw-source)))))))
+        #"Llang/([a-z].*?;)" "Llang2/$1")))
+
+
+
+(def path "./src/jml/l2/compilel2.clj")
+(def compile-file (slurp path))
+(spit path
+      (str
+       (subs compile-file 0 (+ (string/index-of compile-file ";; CODE") (count ";; CODE")))
+       "\n\n"
+       (string/replace 
+        (string/join "\n\n"
+                     (map (fn [function]
+                            (with-out-str
+                              (clojure.pprint/pprint function)))
+                          (map make-make-fn2
+                               (filter (comp #{:fn} :type)
+                                       (vals
+                                        (:functions-with-ir
+                                         (core/get-ir-multiple*
+                                          @core/raw-source)))))))
+        #"Llang/([a-z].*?;)" "Llang3/$1")))
 
 
 

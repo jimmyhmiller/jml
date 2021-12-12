@@ -83,7 +83,7 @@
 
 
    ;; We are missing some cases here
-   ;; We know we are missing JumpCmp, NewArray, ArrayStore, GetStatic and probably others
+   ;; We know we are missing JumpCmp
    (cond
 
      (.equals (.-tagName code) "MultInt")
@@ -107,7 +107,7 @@
      (.equals (.-tagName code) "PutField")
      (.putField gen (.-owner code) (.-name code) (.-fieldType code))
 
-     (.equals (.-tagName code) "GetStaticField")
+     (.equals (.-tagName code) "GetStatic")
      (.getStatic gen (.-owner code) (.-name code) (.-resultType code))
 
      (.equals (.-tagName code) "InvokeStatic")
@@ -161,6 +161,22 @@
      (.equals (.-tagName code) "Return")
      (.returnValue gen)
 
+     (.equals (.-tagName code) "NewArray")
+     (.newArray gen (.-owner code))
+
+     (.equals (.-tagName code) "ArrayLength")
+     (.arrayLength gen)
+
+     (.equals (.-tagName code) "ArrayLoad")
+     (.arrayLoad gen (.-owner code))
+
+     (.equals (.-tagName code) "ArrayStore")
+     (do
+       (.arrayStore gen (.-owner code))
+       (.visitInsn gen Opcodes/ACONST_NULL))
+     
+     
+
      :else (do (print (.-tagName code)) nil)))
 
 
@@ -199,7 +215,7 @@
          nil))
 
 
-     (.equals (.-tagName code) "JumpCompare")
+     (.equals (.-tagName code) "JumpCmp")
      (if (.containsKey env (.-stringValue code))
        (let [label (.get env (.-stringValue code)) Label]
          (.ifCmp gen (.-compareType code) (.-compareOp code) label)
