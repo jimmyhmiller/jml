@@ -1,6 +1,11 @@
 # jml
 
 
+
+Really this was just a fun experiment in making a compile to jvm language without a lot of planning. We made a mess of a codebase, but it does a good amount and we learned more about making a compile to jvm language.
+
+## Original Below
+
 ## Aspiration Attributes
 - Rust Inspired
 - ML Inspired
